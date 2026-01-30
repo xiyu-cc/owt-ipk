@@ -709,6 +709,7 @@ return view.extend({
 		neighborList.appendChild(E('em', {}, _('Click "Scan Neighbor Cells" to search for nearby cell towers')));
 		neighborSection.appendChild(neighborList);
 		container.appendChild(neighborSection);
+		this.renderNeighborCellFromCache(modem, neighborList);
 
 		// 2. Lock Cell Status Section
 		var statusSection = E('div', { 
@@ -1216,32 +1217,18 @@ return view.extend({
 			}
 			self.stopNeighborScanTimer(modem, true);
 
-			var nrCells = result.NR || [];
-			var lteCells = result.LTE || [];
-			var lockcellStatus = result.lockcell_status || {};
-
-			// Update status section
-			var statusContent = document.getElementById('lockcell_status_' + modem.id);
-			if (statusContent) {
-				self.updateLockCellStatus(modem, statusContent, lockcellStatus);
-			}
-
-			if (nrCells.length === 0 && lteCells.length === 0) {
-				dom.content(neighborList, E('div', { 'class': 'alert-message info' },
-					_('No neighbor cells found. Make sure the modem has network signal.')));
+			var finalize = function(currentPlmn) {
+				var payload = self.buildNeighborCellCachePayload(result, scanMode, timeout, currentPlmn);
+				self.saveNeighborCellCache(modem.id, payload);
+				self.renderNeighborCellFromCache(modem, neighborList);
 				scanButton.disabled = false;
 				scanButton.textContent = _('Scan Neighbor Cells');
-				return;
-			}
-
-			var groups = []
-				.concat(self.mergeNeighborCells(nrCells, 'NR', 1))
-				.concat(self.mergeNeighborCells(lteCells, 'LTE', 0));
+			};
 
 			self.getCurrentPlmn(modem).then(function(currentPlmn) {
-				self.renderNeighborCellTables(modem, neighborList, groups, currentPlmn);
-				scanButton.disabled = false;
-				scanButton.textContent = _('Scan Neighbor Cells');
+				finalize(currentPlmn);
+			}).catch(function() {
+				finalize(null);
 			});
 
 			}).catch(function(e) {
@@ -1421,6 +1408,85 @@ return view.extend({
 		}
 
 		renderStatus(lockcellStatus);
+	},
+
+	neighborCellCacheKey: function(modemId) {
+		return 'qmodem_neighborcell_cache_' + modemId;
+	},
+
+	loadNeighborCellCache: function(modemId) {
+		var key = this.neighborCellCacheKey(modemId);
+		try {
+			var raw = localStorage.getItem(key);
+			if (!raw)
+				return null;
+			var parsed = JSON.parse(raw);
+			if (!parsed || typeof parsed !== 'object' || !parsed.data)
+				return null;
+			return parsed;
+		} catch (e) {
+			console.warn('Failed to parse neighbor cell cache:', e);
+			return null;
+		}
+	},
+
+	saveNeighborCellCache: function(modemId, payload) {
+		var key = this.neighborCellCacheKey(modemId);
+		try {
+			localStorage.setItem(key, JSON.stringify(payload));
+		} catch (e) {
+			console.warn('Failed to save neighbor cell cache:', e);
+		}
+	},
+
+	buildNeighborCellCachePayload: function(result, scanMode, timeout, currentPlmn) {
+		var data = result || {};
+		return {
+			ts: Date.now(),
+			scan_mode: scanMode,
+			timeout: timeout,
+			current_plmn: currentPlmn || null,
+			data: {
+				NR: Array.isArray(data.NR) ? data.NR : [],
+				LTE: Array.isArray(data.LTE) ? data.LTE : [],
+				lockcell_status: (data.lockcell_status && typeof data.lockcell_status === 'object') ? data.lockcell_status : {},
+				scan_status: data.scan_status || ''
+			}
+		};
+	},
+
+	renderNeighborCellFromCache: function(modem, neighborList) {
+		var self = this;
+		var cache = self.loadNeighborCellCache(modem.id);
+		if (!cache || !cache.data)
+			return false;
+
+		var data = cache.data || {};
+		var nrCells = Array.isArray(data.NR) ? data.NR : [];
+		var lteCells = Array.isArray(data.LTE) ? data.LTE : [];
+		var lockcellStatus = data.lockcell_status || null;
+
+		var statusContent = document.getElementById('lockcell_status_' + modem.id);
+		if (statusContent) {
+			if (lockcellStatus && typeof lockcellStatus === 'object') {
+				self.updateLockCellStatus(modem, statusContent, lockcellStatus);
+			} else {
+				dom.content(statusContent, E('em', {}, _('No status information available')));
+			}
+		}
+
+		if (nrCells.length === 0 && lteCells.length === 0) {
+			dom.content(neighborList, E('div', { 'class': 'alert-message info' },
+				_('No neighbor cells found. Make sure the modem has network signal.')));
+			return true;
+		}
+
+		var groups = []
+			.concat(self.mergeNeighborCells(nrCells, 'NR', 1))
+			.concat(self.mergeNeighborCells(lteCells, 'LTE', 0));
+		var currentPlmn = cache.current_plmn || null;
+		self.renderNeighborCellTables(modem, neighborList, groups, currentPlmn);
+		return true;
 	},
 
 	createLockBandTab: function(modem) {
