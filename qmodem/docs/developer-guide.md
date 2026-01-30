@@ -1,72 +1,65 @@
 # QModem Developer Guide
 
-This document provides a guide for developers looking to understand, extend, or adapt the `luci-app-qmodem` application.
+This document provides a guide for developers looking to understand, extend, or adapt the `luci-app-qmodem-next` application.
 
 ## 1. Project Structure
 
-The `luci-app-qmodem` is the core LuCI application for modem management. Its structure follows the standard LuCI MVC pattern.
+The `luci-app-qmodem-next` is the modern JavaScript LuCI application for modem management. Its structure follows LuCI's JS view pattern (no Lua MVC).
 
 ```
-luci-app-qmodem/
-├── Makefile              # Build instructions for the package
+luci-app-qmodem-next/
+├── Makefile
 ├── htdocs/
-│   └── luci-static/      # Static web assets (JS, CSS, images)
+│   └── luci-static/
 │       └── resources/
-│           └── qmodem/
-│               ├── modem.js # Main JavaScript for frontend logic
-│               └── ...      # Other JS files
-├── luasrc/
-│   ├── controller/
-│   │   └── qmodem.lua    # Main controller, handles API requests and page rendering
-│   ├── model/
-│   │   └── cbi/
-│   │       └── qmodem/   # CBI models for configuration pages
-│   │           ├── dial_config.lua
-│   │           ├── modem_cfg.lua
-│   │           └── ...
-│   └── view/
-│       └── qmodem/       # HTML templates for the views
-│           ├── modem_status.htm
-│           └── ...
-└── root/
-    └── etc/
-        ├── config/
-        │   └── qmodem    # Default configuration file
-        └── uci-defaults/
-            └── luci-qmodem # Script to set up default configs
+│           ├── qmodem/           # JS API wrapper (rpcd/ubus)
+│           └── view/qmodem/      # JS views (overview, config, debug, sms, settings)
+├── root/
+│   └── usr/share/
+│       ├── luci/menu.d/          # Menu entries
+│       └── rpcd/acl.d/           # ACL permissions
+└── po/                            # Translations
 ```
 
--   **`controller/qmodem.lua`**: The heart of the application. It defines the menu structure and handles all the API calls from the frontend.
--   **`model/cbi/qmodem/`**: Contains the CBI (Configuration Binding Interface) files that generate the forms in the LuCI web interface for configuring the modem.
--   **`htdocs/luci-static/resources/qmodem/`**: Contains JavaScript files that provide dynamic functionality to the web interface, such as polling for modem status.
--   **`root/etc/config/qmodem`**: The UCI configuration file where all settings for the modem are stored.
+-   **`htdocs/luci-static/resources/view/qmodem/`**: JavaScript views that render the UI pages and call ubus methods.
+-   **`htdocs/luci-static/resources/qmodem/`**: Frontend API wrapper for rpcd/ubus calls.
+-   **`root/usr/share/luci/menu.d/`**: LuCI menu definitions.
+-   **`root/usr/share/rpcd/acl.d/`**: RPC access control for qmodem ubus methods.
 
 ## 2. API Endpoints and Parameters
 
-The frontend communicates with the backend via API calls handled by `controller/qmodem.lua`. The primary endpoint is `/cgi-bin/luci/admin/modem/qmodem`. The action is determined by a `json` parameter in the request.
+The frontend communicates with the backend through rpcd/ubus. You can inspect available methods with:
 
-Here are some of the key API actions:
+```
+ubus call qmodem list
+```
 
-| Action                | Description                                   | Parameters                                  |
-| --------------------- | --------------------------------------------- | ------------------------------------------- |
-| `get_modem_list`      | Retrieves a list of detected modems.          | -                                           |
-| `get_modem_info`      | Gets detailed information for a specific modem. | `slot`: The slot ID of the modem.           |
-| `set_modem_info`      | Sets configuration for a modem.               | `slot`, `key`, `value`                      |
-| `scan_modem`          | Initiates a scan for new modems.              | -                                           |
-| `get_dial_status`     | Gets the current network connection status.   | `slot`                                      |
-| `dial_up`             | Starts the network connection.                | `slot`                                      |
-| `dial_down`           | Stops the network connection.                 | `slot`                                      |
-| `send_at_command`     | Sends an AT command to the modem.             | `slot`, `cmd`                               |
-| `get_sms_list`        | Retrieves a list of SMS messages.             | `slot`                                      |
-| `send_sms`            | Sends an SMS message.                         | `slot`, `number`, `message`                 |
+Common methods include:
+
+| Method | Description | Parameters |
+| ------ | ----------- | ---------- |
+| `base_info` | Basic modem info | `config_section` |
+| `network_info` | Network status | `config_section` |
+| `cell_info` | Cell details | `config_section` |
+| `sim_info` | SIM status | `config_section` |
+| `dial_status` | Dial status | `config_section` |
+| `modem_dial` | Start dialing | `config_section` |
+| `modem_hang` | Stop dialing | `config_section` |
+| `send_at` | Send an AT command | `config_section`, `params` |
+| `get_sms` | List SMS messages | `config_section` |
+| `send_sms` | Send an SMS message | `config_section`, `params` |
+| `delete_sms` | Delete SMS by index | `config_section`, `index` |
+| `scan_usb` / `scan_pcie` / `scan_all` | Scan for modems | - |
+
+The SMS conversation views also use the `qmodem_sms` ubus object for list/send/delete operations.
 
 ## 3. Modem Scan Workflow
 
 The modem scan process is crucial for detecting and initializing modems.
 
 1.  **User Trigger**: The user clicks the "Scan Modems" button in the web interface.
-2.  **API Call**: The frontend sends a `scan_modem` request to the backend.
-3.  **Backend Script**: The `qmodem.lua` controller executes a shell script (`/usr/share/qmodem/scan_modem.sh` or similar).
+2.  **API Call**: The frontend sends an ubus request such as `scan_usb`, `scan_pcie`, or `scan_all` via rpcd.
+3.  **Backend Script**: rpcd executes `/usr/share/qmodem/modem_scan.sh`.
 4.  **Device Detection**: The script scans for devices that look like modems. This is typically done by:
     -   Checking `/sys/bus/usb/devices` for USB devices with known vendor/product IDs.
     -   Checking `/sys/bus/pci/devices` for PCIe devices.
@@ -87,7 +80,7 @@ Adapting `qmodem` for a new, unsupported modem generally involves the following 
     -   Modifying the AT commands used to put the modem into the correct mode for dialing.
 5.  **Update Scan Logic (if necessary)**: If the modem has a unique USB Vendor/Product ID that isn't recognized, you may need to add it to the detection scripts.
 6.  **Add to `support_list.md`**: Once the modem is working, add it to the `support_list.md` file to document its compatibility.
-7.  **Custom AT Commands**: For special features of the new modem (e.g., unique band locking commands), you can add custom AT command buttons to the LuCI interface by editing the CBI and controller files. This allows users to easily access these features.
+7.  **Custom AT Commands**: For special features of the new modem (e.g., unique band locking commands), you can add custom AT command buttons to the LuCI interface by editing the JS views and frontend API wrapper. This allows users to easily access these features.
 
 By following these steps, you can integrate new modems into the `qmodem` ecosystem and take advantage of its management features.
 

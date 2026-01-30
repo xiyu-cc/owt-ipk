@@ -3,7 +3,7 @@
 ## 流程简介
 
 在以下几个地方会触发模组扫描
-负责扫描的都是 ```luci/luci-app-qmodem/root/usr/share/qmodem/modem_scan.sh``` 脚本
+负责扫描的是 `/usr/share/qmodem/modem_scan.sh` 脚本
 ### 模组扫描流程：
 
 1. qmodem_init 服务

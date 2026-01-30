@@ -23,7 +23,7 @@ echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.defa
 make menuconfig
 ```
 
-在 `make menuconfig` 中，导航到 `LuCI -> Applications` 以选择 QModem 软件包。
+在 `make menuconfig` 中，导航到 `LuCI -> Applications` 并选择 `luci-app-qmodem-next`（以及核心 `qmodem` 包）。
 
 最后，构建固件：
 
@@ -33,13 +33,10 @@ make -j$(nproc)
 
 ### 软件包
 
-QModem 套件是模块化的。以下是每个软件包的功能：
+QModem 由后端与单一现代化 LuCI 前端组成：
 
-* **`luci-app-qmodem` (核心)**: 提供模组管理、状态监控和拨号的核心 Web 界面的主软件包。
-* **`luci-app-qmodem-sms`**: 添加短信界面以发送和接收短信。
-* **`luci-app-qmodem-mwan`**: 将模组与 OpenWRT 的 `mwan3` 集成，用于多 WAN 负载均衡和故障转移。
-* **`luci-app-qmodem-ttl`**: 提供修改数据包 TTL 的选项，这对于绕过运营商的网络共享限制非常有用。
-* **`luci-app-qmodem-hc`**: 支持具有硬件控制 SIM 卡插槽的特定设备（例如 HC-G80），允许从 UI 切换 SIM 卡。
+* **`qmodem` (核心后端)**: 负责模组检测、拨号控制、AT 命令处理与 ubus 接口。
+* **`luci-app-qmodem-next` (Web 前端)**: 现代 JavaScript LuCI 界面，支持监控、配置、调试与短信功能。
 
 ### 从 Release 安装
 
@@ -49,49 +46,26 @@ QModem 套件是模块化的。以下是每个软件包的功能：
 
 ```bash
 # 安装示例
-opkg install luci-app-qmodem.ipk
+opkg install luci-app-qmodem-next.ipk
 
 # 强制安装示例 (请谨慎使用)
-opkg install luci-app-qmodem.ipk --force-depends
+opkg install luci-app-qmodem-next.ipk --force-depends
 ```
 
 ## 2. 功能介绍
 
-### `luci-app-qmodem` (核心)
+### `luci-app-qmodem-next` (Web 前端)
 
-主插件为管理您的模组提供了全面的界面。
+现代 LuCI 前端为管理您的模组提供了全面的界面。
 
 * **模组信息**: 显示详细状态，包括制造商、型号、固件、IMEI、信号质量 (RSSI, RSRP, RSRQ, SINR) 和网络注册详情。
   ![模组信息](../imgs/modem_info.png)
 * **拨号控制**: 允许您配置和控制模组的数据连接。
   ![拨号总览](../imgs/dial_overview.png)
+* **短信**: 以对话形式收发短信。
+  ![短信界面](../imgs/modem_sms.png)
 * **高级调试**: 提供锁频段、锁小区和发送自定义 AT 命令的工具。
   ![高级设置](../imgs/modem_debug_lock_band.png)
-
-### `luci-app-qmodem-sms`
-
-向 LuCI 界面添加一个完整的短信门户。
-
-* 发送和接收短信。
-* 查看消息历史记录。
-* 支持 PDU 模式以进行原始消息发送。
-  ![短信界面](../imgs/modem_sms.png)
-
-### `luci-app-qmodem-mwan`
-
-此插件将模组配置为 `mwan3` (多 WAN) 的 WAN 接口。
-
-* 设置负载均衡规则以在多个互联网连接之间分配流量。
-* 配置故障转移以在主连接失败时自动切换到备用连接。
-  ![MWAN 配置](../imgs/modem_mwan.png)
-
-### `luci-app-qmodem-ttl`
-
-允许您修改 IP 包的生存时间 (TTL) 值。这有时用于防止运营商检测和限制热点或网络共享数据的使用。
-
-### `luci-app-qmodem-hc`
-
-为使用 GPIO 控制活动 SIM 卡插槽的特定硬件型号提供一个用于在两个 SIM 卡之间切换的 UI。
 
 ## 3. 配置选项
 

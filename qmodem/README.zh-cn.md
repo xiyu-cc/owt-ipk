@@ -6,9 +6,8 @@
 
 ### 使用方法：
 - 更新feeds并安装feeds新增的软件包。
-- 导航到Luci -> Application -> luci-app-qmodem。
-- 移除luci-app-qmodem以及luci-app-qmodem-sms/mwam/ttl等。
-- 选择luci-app-qmodem-next。
+- 在 `make menuconfig` 中选择 `LuCI -> Applications -> luci-app-qmodem-next`（以及核心 `qmodem` 包）。
+- 安装后进入 LuCI -> Modem -> QModem。
 
 ### 功能改动：
 1. 优化了拨号配置界面，重新设计了拨号日志和拨号状态的显示逻辑。
@@ -45,7 +44,7 @@
 -   **广泛的硬件支持**: 管理来自Quectel、Fibocom等供应商的多种USB和PCIe蜂窝调制解调器。
 -   **直观的Web界面**: 简洁的LuCI界面，方便进行状态监控和配置。
 -   **高级调制解调器控制**: 通过锁频段、锁小区和网络模式选择等功能微调您的网络连接。
--   **短信与多WAN**: 包含用于发送/接收短信和配置多WAN故障转移/负载均衡的可选插件。
+-   **内置短信**: 在 Web 界面中发送/接收短信（需模组支持），并可配合短信转发使用。
 -   **健壮稳定**: 通过基于卡槽的设备绑定和优化的AT命令处理等功能，确保系统可靠性。
 
 有关功能和能力的完整列表，请参阅[用户指南](docs/user-guide.zh-cn.md)。
@@ -58,7 +57,7 @@
 
 ### 安装
 
-要安装QModem，请将自定义Feed源添加到您的OpenWRT编译环境，并在 `make menuconfig` 中选择 `luci-app-qmodem` 相关软件包。
+要安装QModem，请将自定义Feed源添加到您的OpenWRT编译环境，并在 `make menuconfig` 中选择 `luci-app-qmodem-next` 和 `qmodem` 相关软件包。
 
 有关详细的、分步的安装说明，请参阅 **[安装指南](docs/user-guide.zh-cn.md#安装)**。
 

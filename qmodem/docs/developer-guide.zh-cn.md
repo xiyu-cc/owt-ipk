@@ -1,72 +1,65 @@
 # QModem 开发者指南
 
-本文档为希望理解、扩展或适配 `luci-app-qmodem` 应用程序的开发者提供指南。
+本文档为希望理解、扩展或适配 `luci-app-qmodem-next` 应用程序的开发者提供指南。
 
 ## 1. 项目结构
 
-`luci-app-qmodem` 是用于调制解调器管理的核心LuCI应用程序。其结构遵循标准的LuCI MVC模式。
+`luci-app-qmodem-next` 是现代化的 JavaScript LuCI 应用程序。其结构遵循 LuCI 的 JS 视图模式（无 Lua MVC）。
 
 ```
-luci-app-qmodem/
-├── Makefile              # 软件包的编译说明
+luci-app-qmodem-next/
+├── Makefile
 ├── htdocs/
-│   └── luci-static/      # 静态Web资源 (JS, CSS, 图片)
+│   └── luci-static/
 │       └── resources/
-│           └── qmodem/
-│               ├── modem.js # 前端逻辑的主要JavaScript文件
-│               └── ...      # 其他JS文件
-├── luasrc/
-│   ├── controller/
-│   │   └── qmodem.lua    # 主控制器，处理API请求和页面渲染
-│   ├── model/
-│   │   └── cbi/
-│   │       └── qmodem/   # 用于配置页面的CBI模型
-│   │           ├── dial_config.lua
-│   │           ├── modem_cfg.lua
-│   │           └── ...
-│   └── view/
-│       └── qmodem/       # 视图的HTML模板
-│           ├── modem_status.htm
-│           └── ...
-└── root/
-    └── etc/
-        ├── config/
-        │   └── qmodem    # 默认配置文件
-        └── uci-defaults/
-            └── luci-qmodem # 用于设置默认配置的脚本
+│           ├── qmodem/           # JS API 封装（rpcd/ubus）
+│           └── view/qmodem/      # JS 页面（overview/config/debug/sms/settings）
+├── root/
+│   └── usr/share/
+│       ├── luci/menu.d/          # LuCI 菜单定义
+│       └── rpcd/acl.d/           # RPC 权限
+└── po/                            # 翻译文件
 ```
 
--   **`controller/qmodem.lua`**: 应用程序的核心。它定义了菜单结构并处理来自前端的所有API调用。
--   **`model/cbi/qmodem/`**: 包含CBI（配置绑定接口）文件，这些文件在LuCI Web界面中生成用于配置调制解调器的表单。
--   **`htdocs/luci-static/resources/qmodem/`**: 包含为Web界面提供动态功能的JavaScript文件，例如轮询调制解调器状态。
--   **`root/etc/config/qmodem`**: UCI配置文件，所有调制解调器的设置都存储在这里。
+-   **`htdocs/luci-static/resources/view/qmodem/`**: JS 页面渲染与 ubus 调用。
+-   **`htdocs/luci-static/resources/qmodem/`**: 前端 rpcd/ubus API 封装。
+-   **`root/usr/share/luci/menu.d/`**: LuCI 菜单入口。
+-   **`root/usr/share/rpcd/acl.d/`**: qmodem ubus 方法的 ACL 权限。
 
 ## 2. API端点和参数
 
-前端通过由 `controller/qmodem.lua` 处理的API调用与后端通信。主端点是 `/cgi-bin/luci/admin/modem/qmodem`。操作由请求中的 `json` 参数确定。
+前端通过 rpcd/ubus 与后端通信。可用方法可通过以下命令查看：
 
-以下是一些关键的API操作：
+```
+ubus call qmodem list
+```
 
-| 操作 (Action)         | 描述                                   | 参数                                  |
-| --------------------- | -------------------------------------- | ------------------------------------- |
-| `get_modem_list`      | 检索检测到的调制解调器列表。           | -                                     |
-| `get_modem_info`      | 获取特定调制解调器的详细信息。         | `slot`: 调制解调器的卡槽ID。          |
-| `set_modem_info`      | 设置调制解调器的配置。                 | `slot`, `key`, `value`                |
-| `scan_modem`          | 启动扫描新调制解调器。                 | -                                     |
-| `get_dial_status`     | 获取当前网络连接状态。                 | `slot`                                |
-| `dial_up`             | 启动网络连接。                         | `slot`                                |
-| `dial_down`           | 停止网络连接。                         | `slot`                                |
-| `send_at_command`     | 向调制解调器发送AT命令。               | `slot`, `cmd`                         |
-| `get_sms_list`        | 检索短信列表。                         | `slot`                                |
-| `send_sms`            | 发送短信。                             | `slot`, `number`, `message`           |
+常用方法示例：
+
+| 方法 | 说明 | 参数 |
+| ---- | ---- | ---- |
+| `base_info` | 基础模组信息 | `config_section` |
+| `network_info` | 网络状态 | `config_section` |
+| `cell_info` | 小区信息 | `config_section` |
+| `sim_info` | SIM 状态 | `config_section` |
+| `dial_status` | 拨号状态 | `config_section` |
+| `modem_dial` | 开始拨号 | `config_section` |
+| `modem_hang` | 结束拨号 | `config_section` |
+| `send_at` | 发送 AT 命令 | `config_section`, `params` |
+| `get_sms` | 获取短信列表 | `config_section` |
+| `send_sms` | 发送短信 | `config_section`, `params` |
+| `delete_sms` | 删除短信 | `config_section`, `index` |
+| `scan_usb` / `scan_pcie` / `scan_all` | 扫描模组 | - |
+
+短信会话页面还会使用 `qmodem_sms` ubus 对象进行列表/发送/删除操作。
 
 ## 3. 调制解调器扫描工作流
 
 调制解调器扫描过程对于检测和初始化调制解调器至关重要。
 
 1.  **用户触发**: 用户在Web界面中点击“扫描调制解调器”按钮。
-2.  **API调用**: 前端向后端发送一个 `scan_modem` 请求。
-3.  **后端脚本**: `qmodem.lua` 控制器执行一个shell脚本（例如 `/usr/share/qmodem/scan_modem.sh`）。
+2.  **API调用**: 前端通过 ubus 发送 `scan_usb`、`scan_pcie` 或 `scan_all` 请求。
+3.  **后端脚本**: rpcd 执行 `/usr/share/qmodem/modem_scan.sh`。
 4.  **设备检测**: 脚本扫描看起来像调制解调器的设备。这通常通过以下方式完成：
     -   检查 `/sys/bus/usb/devices` 中具有已知供应商/产品ID的USB设备。
     -   检查 `/sys/bus/pci/devices` 中的PCIe设备。
@@ -87,7 +80,7 @@ luci-app-qmodem/
     -   修改用于将调制解调器置于正确拨号模式的AT命令。
 5.  **更新扫描逻辑（如果需要）**: 如果调制解调器具有未被识别的唯一USB供应商/产品ID，您可能需要将其添加到检测脚本中。
 6.  **添加到 `support_list.md`**: 一旦调制解调器工作正常，将其添加到 `support_list.md` 文件中以记录其兼容性。
-7.  **自定义AT命令**: 对于新调制解调器的特殊功能（例如，独特的锁频段命令），您可以通过编辑CBI和控制器文件，在LuCI界面中添加自定义AT命令按钮。这使用户可以轻松访问这些功能。
+7.  **自定义AT命令**: 对于新调制解调器的特殊功能（例如，独特的锁频段命令），您可以通过编辑 JS 视图与前端 API 封装，在LuCI界面中添加自定义AT命令按钮。这使用户可以轻松访问这些功能。
 
 通过遵循这些步骤，您可以将新的调制解调器集成到 `qmodem` 生态系统中，并利用其管理功能。
 

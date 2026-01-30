@@ -23,7 +23,7 @@ echo 'src-git qmodem https://github.com/FUjr/QModem.git;main' >> feeds.conf.defa
 make menuconfig
 ```
 
-In `make menuconfig`, navigate to `LuCI -> Applications` to select the QModem packages.
+In `make menuconfig`, navigate to `LuCI -> Applications` and select `luci-app-qmodem-next` (plus the core `qmodem` package).
 
 Finally, build the firmware:
 
@@ -33,13 +33,10 @@ make -j$(nproc)
 
 ### Software Packages
 
-The QModem suite is modular. Here are the functions of each package:
+The QModem suite consists of a backend and a single modern LuCI frontend:
 
-* **`luci-app-qmodem` (Core)**: The main package providing the core web interface for modem management, status monitoring, and dialing.
-* **`luci-app-qmodem-sms`**: Adds an SMS interface to send and receive text messages.
-* **`luci-app-qmodem-mwan`**: Integrates the modem with OpenWRT's `mwan3` for multi-WAN load balancing and failover.
-* **`luci-app-qmodem-ttl`**: Provides options to modify the TTL of packets, which can be useful for bypassing carrier tethering restrictions.
-* **`luci-app-qmodem-hc`**: Support for specific devices with hardware-controlled SIM slots (e.g., HC-G80), allowing SIM switching from the UI.
+* **`qmodem` (Core backend)**: Modem detection, dialing control, AT command handling, and ubus APIs.
+* **`luci-app-qmodem-next` (Web UI)**: Modern JavaScript LuCI interface for monitoring, configuration, debugging, and SMS.
 
 ### Installation from Release
 
@@ -49,49 +46,26 @@ When installing pre-compiled `.ipk` packages from a release, be aware of kernel 
 
 ```bash
 # Example installation
-opkg install luci-app-qmodem.ipk
+opkg install luci-app-qmodem-next.ipk
 
 # Example of a forced installation (use with caution)
-opkg install luci-app-qmodem.ipk --force-depends
+opkg install luci-app-qmodem-next.ipk --force-depends
 ```
 
 ## 2. Features Introduction
 
-### `luci-app-qmodem` (Core)
+### `luci-app-qmodem-next` (Web UI)
 
-The main plugin provides a comprehensive interface for managing your modem.
+The modern LuCI frontend provides a comprehensive interface for managing your modem.
 
 * **Modem Information**: Displays detailed status including manufacturer, model, firmware, IMEI, signal quality (RSSI, RSRP, RSRQ, SINR), and network registration details.
   ![Modem Info](../imgs/modem_info.png)
 * **Dialing Control**: Allows you to configure and control the modem's data connection.
   ![Dialing Overview](../imgs/dial_overview.png)
+* **SMS**: Send and receive messages in a conversation-style view.
+  ![SMS Interface](../imgs/modem_sms.png)
 * **Advanced Debugging**: Offers tools for band locking, cell locking, and sending custom AT commands.
   ![Advanced Settings](../imgs/modem_debug_lock_band.png)
-
-### `luci-app-qmodem-sms`
-
-Adds a complete SMS portal to the LuCI interface.
-
-* Send and receive SMS messages.
-* View message history.
-* Supports PDU mode for raw message sending.
-  ![SMS Interface](../imgs/modem_sms.png)
-
-### `luci-app-qmodem-mwan`
-
-This plugin configures the modem as a WAN interface for `mwan3` (Multi-WAN).
-
-* Set up load balancing rules to distribute traffic across multiple internet connections.
-* Configure failover to automatically switch to a backup connection if the primary one fails.
-  ![MWAN Configuration](../imgs/modem_mwan.png)
-
-### `luci-app-qmodem-ttl`
-
-Allows you to modify the Time-To-Live (TTL) value of IP packets. This is sometimes used to prevent carriers from detecting and throttling hotspot or tethering data usage.
-
-### `luci-app-qmodem-hc`
-
-Provides a UI for switching between two SIM cards on specific hardware models that use GPIOs to control the active SIM slot.
 
 ## 3. Configuration Options
 

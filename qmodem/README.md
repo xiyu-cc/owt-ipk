@@ -6,9 +6,8 @@ Due to popular demand, QModem has introduced a pure JS Luci frontend, which elim
 
 ### Usage:
 - Update feeds and install the newly added packages.
-- Navigate to Luci -> Application -> luci-app-qmodem.
-- Remove luci-app-qmodem and luci-app-qmodem-sms/mwam/ttl, etc.
-- Select luci-app-qmodem-next.
+- In `make menuconfig`, select `LuCI -> Applications -> luci-app-qmodem-next` (and the core `qmodem` package).
+- After installation, open LuCI -> Modem -> QModem.
 
 ### Feature Changes:
 1. Optimized the dial-up configuration interface, redesigned the display logic for dial-up logs and status.
@@ -47,7 +46,7 @@ This project aims to provide a stable, extensible, and user-friendly solution fo
 - **Broad Hardware Support**: Manages a wide range of USB and PCIe cellular modems from vendors like Quectel, Fibocom, and more.
 - **Intuitive Web Interface**: A clean LuCI interface for at-a-glance status monitoring and configuration.
 - **Advanced Modem Control**: Fine-tune your connection with features like band locking, cell locking, and network mode selection.
-- **SMS and Multi-WAN**: Includes optional plugins for sending/receiving SMS and configuring multi-WAN failover/load balancing.
+- **Integrated SMS**: Send/receive SMS in the web UI (when supported by the modem), with optional forwarding.
 - **Robust and Stable**: Designed for reliability with features like slot-based device binding and optimized AT command handling.
 
 For a complete list of features and capabilities, please see the [User Guide](docs/user-guide.md).
@@ -76,7 +75,7 @@ Perfect for integrating your QModem-powered OpenWrt router into your smart home 
 
 ### Installation
 
-To install QModem, add the custom feed to your OpenWRT build environment and select the `luci-app-qmodem` packages in `make menuconfig`.
+To install QModem, add the custom feed to your OpenWRT build environment and select the `luci-app-qmodem-next` and `qmodem` packages in `make menuconfig`.
 
 For detailed, step-by-step installation instructions, please refer to the **[Installation Guide](docs/user-guide.md#installation)**.
 
