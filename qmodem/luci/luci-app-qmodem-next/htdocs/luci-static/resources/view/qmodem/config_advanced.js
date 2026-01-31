@@ -709,7 +709,6 @@ return view.extend({
 		neighborList.appendChild(E('em', {}, _('Click "Scan Neighbor Cells" to search for nearby cell towers')));
 		neighborSection.appendChild(neighborList);
 		container.appendChild(neighborSection);
-		this.renderNeighborCellFromCache(modem, neighborList);
 
 		// 2. Lock Cell Status Section
 		var statusSection = E('div', { 
@@ -726,6 +725,7 @@ return view.extend({
 		statusContent.appendChild(E('em', {}, _('No status information available')));
 		statusSection.appendChild(statusContent);
 		container.appendChild(statusSection);
+		this.renderNeighborCellFromCache(modem, neighborList);
 
 		// 3. Lock Cell Settings Section
 		var settingsSection = E('div', { 'class': 'cbi-section' });
@@ -834,17 +834,19 @@ return view.extend({
 				btn.disabled = true;
 				btn.textContent = _('Unlocking...');
 				// rpc call lockcell but arfcn and pci empty
-				qmodem.setNeighborCell(modem.id, {
+				var unlockConfig = {
 					rat: '0',
 					pci: '',
 					arfcn: '',
 					band: '',
 					scs: ''
-				}).then(function(result) {
+				};
+				qmodem.setNeighborCell(modem.id, unlockConfig).then(function(result) {
 					if (result) {
 						ui.addNotification(null, E('p', _('Cell unlocked successfully')), 'success');
-						//  Refresh status
-						self.updateLockCellStatus(modem, statusContent);
+						// Update cached status locally to avoid long-running get_neighborcell calls
+						self.updateNeighborCellLockCache(modem.id, unlockConfig);
+						self.updateLockCellStatus(modem, statusContent, self.buildLocalLockStatus(unlockConfig));
 						
 					} else {
 						ui.addNotification(null, E('p', _('Failed to unlock cell')), 'error');
@@ -887,8 +889,9 @@ return view.extend({
 				qmodem.setNeighborCell(modem.id, config).then(function(result) {
 					if (result) {
 						ui.addNotification(null, E('p', _('Lock cell configuration applied successfully')), 'success');
-						// Refresh status
-						self.updateLockCellStatus(modem, statusContent);
+						// Update cached status locally to avoid long-running get_neighborcell calls
+						self.updateNeighborCellLockCache(modem.id, config);
+						self.updateLockCellStatus(modem, statusContent, self.buildLocalLockStatus(config));
 					} else {
 						ui.addNotification(null, E('p', _('Failed to apply lock cell configuration')), 'error');
 					}
@@ -1371,18 +1374,7 @@ return view.extend({
 
 	updateLockCellStatus: function(modem, statusContent, lockcellStatus) {
 		if (!lockcellStatus) {
-			// Try to get fresh status
-			var statusParams = { async: 1, force: 0, timeout: 5 };
-			qmodem.getNeighborCell(modem.id, statusParams).then(function(result) {
-				result = result.neighborcell;
-				if (result && result.lockcell_status) {
-					renderStatus(result.lockcell_status);
-				} else {
-					dom.content(statusContent, E('em', {}, _('No status information available')));
-				}
-			}).catch(function(e) {
-				dom.content(statusContent, E('em', {}, _('Error loading status')));
-			});
+			dom.content(statusContent, E('em', {}, _('No status information available')));
 			return;
 		}
 
@@ -1408,6 +1400,29 @@ return view.extend({
 		}
 
 		renderStatus(lockcellStatus);
+	},
+
+	buildLocalLockStatus: function(config) {
+		var rat = (config && config.rat != null) ? config.rat.toString() : '';
+		var isUnlock = (!config || (!config.pci && !config.arfcn));
+		var status = {};
+		if (isUnlock) {
+			status.LTE = 'unlock';
+			status.NR = 'unlock';
+			return status;
+		}
+		if (rat === '1') {
+			status.NR = 'locked';
+			status.NR_Freq = config.arfcn || '';
+			status.NR_PCI = config.pci || '';
+			status.NR_SCS = config.scs || '';
+			status.NR_Band = config.band || '';
+		} else {
+			status.LTE = 'locked';
+			status.LTE_Freq = config.arfcn || '';
+			status.LTE_PCI = config.pci || '';
+		}
+		return status;
 	},
 
 	neighborCellCacheKey: function(modemId) {
@@ -1453,6 +1468,15 @@ return view.extend({
 				scan_status: data.scan_status || ''
 			}
 		};
+	},
+
+	updateNeighborCellLockCache: function(modemId, config) {
+		var cache = this.loadNeighborCellCache(modemId) || {};
+		var data = cache.data || {};
+		data.lockcell_status = this.buildLocalLockStatus(config);
+		cache.data = data;
+		cache.ts = Date.now();
+		this.saveNeighborCellCache(modemId, cache);
 	},
 
 	renderNeighborCellFromCache: function(modem, neighborList) {

@@ -1416,7 +1416,7 @@ lockcell_qualcomm(){
         res=$res1,$res2
     else
         lock4g="AT+QNWLOCK=\"common/4g\",1,$arfcn,$pci"
-        locknr="AT+QNWLOCK=\"common/5g\",1,$arfcn,$pci,$(get_scs $scs),$band"
+        locknr="AT+QNWLOCK=\"common/5g\",$pci,$arfcn,$(get_scs $scs),$band"
         if [ $rat = "1" ]; then
             res=$(at $at_port $locknr)
         else

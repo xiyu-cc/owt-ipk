@@ -401,7 +401,19 @@ return L.Class.extend({
 
 	// Set neighbor cell
 	setNeighborCell: function(section, params) {
-		return callSetNeighborcell(section, params);
+		var isObject = params && typeof params === 'object' && !Array.isArray(params);
+		if (!isObject)
+			return callSetNeighborcell(section, params);
+
+		return callSetNeighborcell(section, params).catch(function(err) {
+			var serialized = null;
+			try {
+				serialized = JSON.stringify(params);
+			} catch (e) {
+				return Promise.reject(err);
+			}
+			return callSetNeighborcell(section, serialized);
+		});
 	},
 
 	// Set network preference

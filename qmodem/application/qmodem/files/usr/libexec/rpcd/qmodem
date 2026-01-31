@@ -43,6 +43,19 @@ get_sms() {
     fi
 }
 
+# Normalize params that may be JSON-escaped strings
+normalize_params() {
+    local p="$1"
+    case "$p" in
+        *\\\"*)
+            printf '%b' "$p"
+            ;;
+        *)
+            printf '%s' "$p"
+            ;;
+    esac
+}
+
 # Helper function to load vendor-specific script
 load_vendor_script() {
     local vendor="$1"
@@ -416,7 +429,8 @@ EOF
                         ;;
                     get_neighborcell)
                         json_init
-                        params=$(echo "$input" | jsonfilter -e '@.params')
+                        params_raw=$(echo "$input" | jsonfilter -e '@.params')
+                        params=$(normalize_params "$params_raw")
                         if [ -n "$params" ]; then
                             neighborcell_async=$(echo "$params" | jq -r '.async // 0')
                             neighborcell_force=$(echo "$params" | jq -r '.force // 0')
@@ -616,7 +630,8 @@ EOF
                 
             set_lockband|set_neighborcell|set_network_prefer)
                 config_section=$(echo "$input" | jsonfilter -e '@.config_section')
-                params=$(echo "$input" | jsonfilter -e '@.params')
+                params_raw=$(echo "$input" | jsonfilter -e '@.params')
+                params=$(normalize_params "$params_raw")
                 
                 # Source helper functions and get configuration
                 . /usr/share/qmodem/modem_util.sh
@@ -626,6 +641,9 @@ EOF
                 load_vendor_script "$vendor"
                 
                 json_init
+                # Pre-create result to avoid jshn warnings that can corrupt JSON output
+                json_add_object result
+                json_close_object
                 case "$2" in
                     set_lockband)
                         set_lockband "$params"
