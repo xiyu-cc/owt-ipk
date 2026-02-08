@@ -1,0 +1,14 @@
+{
+  "admin/services/fancontrol": {
+    "title": "Fan Control",
+    "order": 90,
+    "action": {
+      "type": "view",
+      "path": "fancontrol/wizard"
+    },
+    "depends": {
+      "acl": [ "luci-app-fancontrol" ]
+    }
+  }
+}
+

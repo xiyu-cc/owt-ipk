@@ -1,0 +1,456 @@
+#!/bin/sh
+
+. /usr/share/libubox/jshn.sh
+
+MAX_PWM=255
+HWMON_ROOT="/sys/class/hwmon"
+
+sanitize_name() {
+	echo "$1" | sed 's/[[:space:]=]/_/g'
+}
+
+read_first_line() {
+	local path="$1"
+	local line
+
+	[ -r "$path" ] || return 1
+	IFS= read -r line < "$path" || return 1
+	echo "$line"
+}
+
+rel_from_sys() {
+	local path="$1"
+
+	case "$path" in
+		/sys/*)
+			echo "${path#/sys/}"
+		;;
+		/sys)
+			echo ""
+		;;
+		*)
+			echo "$path"
+		;;
+	esac
+}
+
+first_readable_temp() {
+	local hw="$1"
+	local f
+
+	for f in "$hw"/temp[0-9]*_input; do
+		[ -f "$f" ] || continue
+		[ -r "$f" ] || continue
+		echo "$f"
+		return 0
+	done
+	return 1
+}
+
+first_readable_fan() {
+	local hw="$1"
+	local f
+
+	for f in "$hw"/fan[0-9]*_input; do
+		[ -f "$f" ] || continue
+		[ -r "$f" ] || continue
+		echo "$f"
+		return 0
+	done
+	return 1
+}
+
+json_error() {
+	local msg="$1"
+
+	json_init
+	json_add_boolean ok 0
+	json_add_string error "$msg"
+	json_dump
+	json_cleanup
+}
+
+json_ok() {
+	local output="$1"
+
+	json_init
+	json_add_boolean ok 1
+	[ -n "$output" ] && json_add_string output "$output"
+	json_dump
+	json_cleanup
+}
+
+scan_channels() {
+	local hw hwname devname devreal devpath_rel
+	local pwm base idx temp fan fan_rel
+
+	json_init
+	json_add_array channels
+
+	for hw in "$HWMON_ROOT"/hwmon*; do
+		[ -d "$hw" ] || continue
+		hwname="$(basename "$hw")"
+
+		devname="$(read_first_line "$hw/name")"
+		[ -z "$devname" ] && devname="$(read_first_line "$hw/device/name")"
+		[ -z "$devname" ] && devname="$hwname"
+		devname="$(sanitize_name "$devname")"
+
+		devreal="$(readlink -f "$hw/device" 2>/dev/null)"
+		devpath_rel="$(rel_from_sys "$devreal")"
+
+		for pwm in "$hw"/pwm[0-9]*; do
+			[ -f "$pwm" ] || continue
+			[ -w "$pwm" ] || continue
+
+			base="$(basename "$pwm")"
+			case "$base" in
+				pwm[0-9]|pwm[0-9][0-9]*)
+				;;
+				*)
+					continue
+				;;
+			esac
+
+			idx="${base#pwm}"
+
+			temp="$hw/temp${idx}_input"
+			if [ ! -r "$temp" ]; then
+				temp="$(first_readable_temp "$hw")"
+				[ -n "$temp" ] || continue
+			fi
+
+			fan="$hw/fan${idx}_input"
+			if [ -r "$fan" ]; then
+				fan_rel="${hwname}/$(basename "$fan")"
+			else
+				fan="$(first_readable_fan "$hw")"
+				if [ -n "$fan" ]; then
+					fan_rel="${hwname}/$(basename "$fan")"
+				else
+					fan_rel=""
+				fi
+			fi
+
+			json_add_object
+			json_add_string hwmon_name "$hwname"
+			json_add_string devpath_rel "$devpath_rel"
+			json_add_string devname "$devname"
+			json_add_string pwm_rel "${hwname}/${base}"
+			json_add_string temp_rel "${hwname}/$(basename "$temp")"
+			json_add_string fan_rel "$fan_rel"
+			json_close_object
+		done
+	done
+
+	json_close_array
+	json_dump
+	json_cleanup
+}
+
+to_int() {
+	local val="$1"
+	local def="$2"
+
+	case "$val" in
+		""|-|*[!0-9-]*)
+			echo "$def"
+		;;
+		*)
+			echo "$val"
+		;;
+	esac
+}
+
+clamp_int() {
+	local val="$1"
+	local min="$2"
+	local max="$3"
+
+	[ "$val" -lt "$min" ] && val="$min"
+	[ "$val" -gt "$max" ] && val="$max"
+	echo "$val"
+}
+
+cfg_get() {
+	local path="$1"
+	local key="$2"
+
+	grep -E "^[[:space:]]*${key}[[:space:]]*=" "$path" 2>/dev/null | \
+		sed -e "s/^[[:space:]]*${key}[[:space:]]*=//" -e 's/[[:space:]]*#.*$//' | \
+		tail -n1
+}
+
+pair_lookup() {
+	local pairs="$1"
+	local key="$2"
+	local def="$3"
+	local token k v
+
+	for token in $pairs; do
+		k="${token%%=*}"
+		v="${token#*=}"
+		[ "$k" = "$key" ] && {
+			echo "$v"
+			return 0
+		}
+	done
+
+	echo "$def"
+}
+
+load_config() {
+	local path="$1"
+	local interval
+	local DEVPATH DEVNAME FCTEMPS FCFANS MINTEMP MAXTEMP MINSTART MINSTOP MINPWM MAXPWM AVERAGE
+	local token pwm_rel temp_rel hw fan_rel mint maxt minstart minstop minpwm maxpwm average devpath_rel devname
+
+	[ -n "$path" ] || path="/etc/fancontrol"
+
+	json_init
+	json_add_boolean ok 1
+	json_add_string path "$path"
+
+	if [ ! -r "$path" ]; then
+		json_add_boolean exists 0
+		json_dump
+		json_cleanup
+		return
+	fi
+
+	interval="$(to_int "$(cfg_get "$path" "INTERVAL")" 10)"
+	[ "$interval" -lt 1 ] && interval=1
+
+	DEVPATH="$(cfg_get "$path" "DEVPATH")"
+	DEVNAME="$(cfg_get "$path" "DEVNAME")"
+	FCTEMPS="$(cfg_get "$path" "FCTEMPS")"
+	FCFANS="$(cfg_get "$path" "FCFANS")"
+	MINTEMP="$(cfg_get "$path" "MINTEMP")"
+	MAXTEMP="$(cfg_get "$path" "MAXTEMP")"
+	MINSTART="$(cfg_get "$path" "MINSTART")"
+	MINSTOP="$(cfg_get "$path" "MINSTOP")"
+	MINPWM="$(cfg_get "$path" "MINPWM")"
+	MAXPWM="$(cfg_get "$path" "MAXPWM")"
+	AVERAGE="$(cfg_get "$path" "AVERAGE")"
+
+	json_add_boolean exists 1
+	json_add_int interval "$interval"
+	json_add_array entries
+
+	for token in $FCTEMPS; do
+		pwm_rel="${token%%=*}"
+		temp_rel="${token#*=}"
+		[ -n "$pwm_rel" ] || continue
+		[ -n "$temp_rel" ] || continue
+
+		hw="${pwm_rel%%/*}"
+		fan_rel="$(pair_lookup "$FCFANS" "$pwm_rel" "")"
+		mint="$(to_int "$(pair_lookup "$MINTEMP" "$pwm_rel" 45)" 45)"
+		maxt="$(to_int "$(pair_lookup "$MAXTEMP" "$pwm_rel" 65)" 65)"
+		minstart="$(to_int "$(pair_lookup "$MINSTART" "$pwm_rel" 150)" 150)"
+		minstop="$(to_int "$(pair_lookup "$MINSTOP" "$pwm_rel" 80)" 80)"
+		minpwm="$(to_int "$(pair_lookup "$MINPWM" "$pwm_rel" 0)" 0)"
+		maxpwm="$(to_int "$(pair_lookup "$MAXPWM" "$pwm_rel" 255)" 255)"
+		average="$(to_int "$(pair_lookup "$AVERAGE" "$pwm_rel" 1)" 1)"
+		devpath_rel="$(pair_lookup "$DEVPATH" "$hw" "")"
+		devname="$(pair_lookup "$DEVNAME" "$hw" "$hw")"
+
+		json_add_object
+		json_add_string pwm_rel "$pwm_rel"
+		json_add_string temp_rel "$temp_rel"
+		json_add_string fan_rel "$fan_rel"
+		json_add_int mintemp "$mint"
+		json_add_int maxtemp "$maxt"
+		json_add_int minstart "$minstart"
+		json_add_int minstop "$minstop"
+		json_add_int minpwm "$minpwm"
+		json_add_int maxpwm "$maxpwm"
+		json_add_int average "$average"
+		json_add_string devpath_rel "$devpath_rel"
+		json_add_string devname "$devname"
+		json_close_object
+	done
+
+	json_close_array
+	json_dump
+	json_cleanup
+}
+
+apply_config() {
+	local output="$1"
+	local interval="$2"
+	local entries="$3"
+	local line
+	local enabled pwm_rel temp_rel fan_rel mint maxt minstart minstop minpwm maxpwm average devpath_rel devname
+	local seen_hw hw
+	local DEVPATH DEVNAME
+	local FCTEMPS FCFANS MINTEMP MAXTEMP MINSTART MINSTOP MINPWM MAXPWM AVERAGE
+	local tmp
+	local has_any=0
+
+	[ -n "$output" ] || output="/etc/fancontrol"
+	interval="$(to_int "$interval" 10)"
+	[ "$interval" -lt 1 ] && interval=1
+
+	while IFS=';' read -r enabled pwm_rel temp_rel fan_rel mint maxt minstart minstop minpwm maxpwm average devpath_rel devname; do
+		[ -n "$enabled$pwm_rel$temp_rel$fan_rel$mint$maxt$minstart$minstop$minpwm$maxpwm$average$devpath_rel$devname" ] || continue
+		[ "$enabled" = "1" ] || continue
+		[ -n "$pwm_rel" ] || continue
+		[ -n "$temp_rel" ] || continue
+
+		mint="$(to_int "$mint" 45)"
+		maxt="$(to_int "$maxt" 65)"
+		[ "$mint" -ge "$maxt" ] && maxt=$((mint + 10))
+
+		minstart="$(clamp_int "$(to_int "$minstart" 150)" 0 "$MAX_PWM")"
+		minstop="$(clamp_int "$(to_int "$minstop" 80)" 0 "$MAX_PWM")"
+		minpwm="$(clamp_int "$(to_int "$minpwm" 0)" 0 "$MAX_PWM")"
+		maxpwm="$(clamp_int "$(to_int "$maxpwm" "$MAX_PWM")" 0 "$MAX_PWM")"
+		average="$(to_int "$average" 1)"
+		[ "$average" -lt 1 ] && average=1
+
+		if [ "$minstop" -ge "$maxpwm" ]; then
+			minstop=$((maxpwm - 1))
+			[ "$minstop" -lt 0 ] && minstop=0
+		fi
+		[ "$minstop" -lt "$minpwm" ] && minstop="$minpwm"
+
+		FCTEMPS="${FCTEMPS:+$FCTEMPS }${pwm_rel}=${temp_rel}"
+		[ -n "$fan_rel" ] && FCFANS="${FCFANS:+$FCFANS }${pwm_rel}=${fan_rel}"
+		MINTEMP="${MINTEMP:+$MINTEMP }${pwm_rel}=${mint}"
+		MAXTEMP="${MAXTEMP:+$MAXTEMP }${pwm_rel}=${maxt}"
+		MINSTART="${MINSTART:+$MINSTART }${pwm_rel}=${minstart}"
+		MINSTOP="${MINSTOP:+$MINSTOP }${pwm_rel}=${minstop}"
+		MINPWM="${MINPWM:+$MINPWM }${pwm_rel}=${minpwm}"
+		MAXPWM="${MAXPWM:+$MAXPWM }${pwm_rel}=${maxpwm}"
+		AVERAGE="${AVERAGE:+$AVERAGE }${pwm_rel}=${average}"
+
+		hw="${pwm_rel%%/*}"
+		case " $seen_hw " in
+			*" $hw "*)
+			;;
+			*)
+				seen_hw="$seen_hw $hw"
+				[ -n "$devpath_rel" ] && DEVPATH="${DEVPATH:+$DEVPATH }${hw}=${devpath_rel}"
+				[ -z "$devname" ] && devname="$hw"
+				devname="$(sanitize_name "$devname")"
+				DEVNAME="${DEVNAME:+$DEVNAME }${hw}=${devname}"
+			;;
+		esac
+
+		has_any=1
+	done << EOF
+$entries
+EOF
+
+	[ "$has_any" = "1" ] || {
+		json_error "no active channels selected"
+		return
+	}
+
+	tmp="$(mktemp /tmp/fancontrol.XXXXXX)" || {
+		json_error "cannot create temporary file"
+		return
+	}
+
+	{
+		echo "# Configuration file generated by LuCI fancontrol wizard"
+		echo "INTERVAL=$interval"
+		[ -n "$DEVPATH" ] && echo "DEVPATH=$DEVPATH"
+		[ -n "$DEVNAME" ] && echo "DEVNAME=$DEVNAME"
+		echo "FCTEMPS=$FCTEMPS"
+		[ -n "$FCFANS" ] && echo "FCFANS=$FCFANS"
+		echo "MINTEMP=$MINTEMP"
+		echo "MAXTEMP=$MAXTEMP"
+		echo "MINSTART=$MINSTART"
+		echo "MINSTOP=$MINSTOP"
+		echo "MINPWM=$MINPWM"
+		echo "MAXPWM=$MAXPWM"
+		echo "AVERAGE=$AVERAGE"
+	} > "$tmp" || {
+		rm -f "$tmp"
+		json_error "failed to render configuration"
+		return
+	}
+
+	chmod 0644 "$tmp"
+	if ! mv "$tmp" "$output"; then
+		rm -f "$tmp"
+		json_error "failed to write configuration"
+		return
+	fi
+
+	json_ok "$output"
+}
+
+service_action() {
+	local action="$1"
+	local cmd
+
+	case "$action" in
+		start|stop|restart|enable|disable)
+			cmd="/etc/init.d/fancontrol $action"
+		;;
+		*)
+			json_error "unsupported action"
+			return
+		;;
+	esac
+
+	if eval "$cmd" >/dev/null 2>&1; then
+		json_ok ""
+	else
+		json_error "service action failed"
+	fi
+}
+
+case "$1" in
+	list)
+		json_init
+		json_add_object scan
+		json_close_object
+		json_add_object loadConfig
+			json_add_string path "string"
+		json_close_object
+		json_add_object apply
+			json_add_string output "string"
+			json_add_string interval "string"
+			json_add_string entries "string"
+		json_close_object
+		json_add_object serviceAction
+			json_add_string action "string"
+		json_close_object
+		json_dump
+		json_cleanup
+	;;
+	call)
+		case "$2" in
+			scan)
+				scan_channels
+			;;
+			loadConfig)
+				read -r input
+				json_load "$input"
+				json_get_var path path
+				json_cleanup
+				load_config "$path"
+			;;
+			apply)
+				read -r input
+				json_load "$input"
+				json_get_var output output
+				json_get_var interval interval
+				json_get_var entries entries
+				json_cleanup
+				apply_config "$output" "$interval" "$entries"
+			;;
+			serviceAction)
+				read -r input
+				json_load "$input"
+				json_get_var action action
+				json_cleanup
+				service_action "$action"
+			;;
+		esac
+	;;
+esac

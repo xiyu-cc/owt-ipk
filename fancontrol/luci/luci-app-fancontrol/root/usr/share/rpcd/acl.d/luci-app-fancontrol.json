@@ -1,0 +1,15 @@
+{
+  "luci-app-fancontrol": {
+    "description": "Grant RPC access for LuCI fancontrol wizard",
+    "read": {
+      "ubus": {
+        "luci.fancontrol": [ "scan", "loadConfig" ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "luci.fancontrol": [ "apply", "serviceAction" ]
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+fancontrol for OpenWrt
+======================
+
+This package installs the `fancontrol` daemon and `pwmconfig` helper from
+lm-sensors scripts.
+
+Quick start:
+1. Install required packages and this package.
+2. Run `pwmconfig` to generate `/etc/fancontrol`.
+3. Enable and start service:
+   /etc/init.d/fancontrol enable
+   /etc/init.d/fancontrol start
+
+Service configuration:
+- UCI config file: `/etc/config/fancontrol`
+- Main option:
+  option config_file '/etc/fancontrol'
