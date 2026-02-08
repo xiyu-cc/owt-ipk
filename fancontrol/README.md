@@ -2,8 +2,8 @@
 
 This feed is organized by function:
 
-- `application/fancontrol/`: C++ `fancontrol` daemon and C++ `pwmconfig`
-- `luci/luci-app-fancontrol/`: LuCI wizard for generating `/etc/fancontrol`
+- `application/fancontrol/`: C++ `fancontrol` daemon (board-mode only)
+- `luci/luci-app-fancontrol/`: LuCI board editor for generating `/etc/fancontrol.r3mini`
 
 ## OpenWrt SDK build
 
@@ -11,5 +11,4 @@ After `./scripts/feeds update fancontrol` and `./scripts/feeds install -f -p fan
 compile by package name:
 
 - `make package/feeds/fancontrol/fancontrol/compile V=s`
-- `make package/feeds/fancontrol/pwmconfig/compile V=s`
 - `make package/feeds/fancontrol/luci-app-fancontrol/compile V=s`

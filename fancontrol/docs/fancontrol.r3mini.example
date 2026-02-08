@@ -1,0 +1,27 @@
+# BPI R3 Mini board-specific fancontrol profile
+# Use with: /usr/sbin/fancontrol /etc/fancontrol.r3mini
+
+INTERVAL=2
+PWM_PATH=/sys/class/hwmon/hwmon2/pwm1
+PWM_ENABLE_PATH=/sys/class/hwmon/hwmon2/pwm1_enable
+THERMAL_MODE_PATH=/sys/class/thermal/thermal_zone0/mode
+PWM_MIN=0
+PWM_MAX=255
+PWM_INVERTED=1
+PWM_STARTUP_PWM=128
+RAMP_UP=25
+RAMP_DOWN=8
+HYSTERESIS_MC=2000
+POLICY=max
+FAILSAFE_PWM=64
+PIDFILE=/var/run/fancontrol.pid
+
+# SoC temperature (milli-Celsius)
+SOURCE_soc=type=sysfs,path=/sys/class/thermal/thermal_zone0/temp,t_start=60000,t_full=82000,t_crit=90000,ttl=6,poll=2,weight=100
+
+# NVMe temperature (milli-Celsius)
+SOURCE_nvme=type=sysfs,path=/sys/class/hwmon/hwmon3/temp1_input,t_start=50000,t_full=70000,t_crit=80000,ttl=6,poll=2,weight=120
+
+# RM500Q-GL temperature via ubus
+# config_section must match your qmodem UCI section name.
+SOURCE_rm500=type=ubus,object=qmodem,method=get_temperature,key=temp_mC,args={"config_section":"modem1"},t_start=58000,t_full=76000,t_crit=85000,ttl=20,poll=10,weight=130

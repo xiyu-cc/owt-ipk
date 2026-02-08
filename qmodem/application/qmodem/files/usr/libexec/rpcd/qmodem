@@ -121,6 +121,99 @@ get_vendor_info() {
     [ -n "$platform" ] && platform=$(printf '%s' "$platform" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 }
 
+# Parse temperature text (e.g. "45C", "45.5 C", "45°C") into milli-Celsius.
+temperature_text_to_mc() {
+    local raw="$1"
+    local number
+    local sign=""
+    local abs_number
+    local int_part
+    local frac_part=""
+    local frac3
+    local temp_mc
+
+    number=$(printf '%s' "$raw" | awk 'match($0, /-?[0-9]+([.][0-9]+)?/) { print substr($0, RSTART, RLENGTH); exit }')
+    [ -z "$number" ] && return 1
+
+    abs_number="$number"
+    case "$abs_number" in
+        -*)
+            sign="-"
+            abs_number="${abs_number#-}"
+            ;;
+    esac
+
+    int_part="${abs_number%%.*}"
+    [ "$abs_number" != "$int_part" ] && frac_part="${abs_number#*.}"
+    int_part=$(printf '%s' "$int_part" | sed 's/^0*//')
+    [ -z "$int_part" ] && int_part=0
+    frac_part=$(printf '%s' "$frac_part" | tr -cd '0-9')
+    frac3=$(printf '%s000' "$frac_part" | cut -c1-3)
+    frac3=$(printf '%s' "$frac3" | sed 's/^0*//')
+    [ -z "$frac3" ] && frac3=0
+
+    temp_mc=$((int_part * 1000 + frac3))
+    [ "$sign" = "-" ] && temp_mc=$((0 - temp_mc))
+    printf '%s\n' "$temp_mc"
+}
+
+# Extract "temperature" entry from qmodem info JSON.
+extract_temperature_text_from_info_json() {
+    local info_json="$1"
+    printf '%s' "$info_json" | jq -r \
+        '.modem_info // [] | map(select((.key // "" | ascii_downcase) == "temperature")) | .[0].value // empty' \
+        2>/dev/null
+}
+
+# Try calling vendor temperature function directly (get_temperature/_get_temperature).
+get_temperature_text_from_vendor() {
+    local fn
+    local temp_text=""
+    for fn in get_temperature _get_temperature; do
+        if type "$fn" >/dev/null 2>&1; then
+            json_init
+            json_add_array modem_info
+            "$fn" >/dev/null 2>&1
+            json_close_array
+            temp_text=$(extract_temperature_text_from_info_json "$(json_dump)")
+            [ -n "$temp_text" ] && {
+                printf '%s\n' "$temp_text"
+                return 0
+            }
+        fi
+    done
+    return 1
+}
+
+# Fallback to full info path and extract temperature from modem_info array.
+get_temperature_text_from_info() {
+    local section="$1"
+    local cache_file="/tmp/cache_info_$section"
+    local info_json
+    local temp_text
+
+    json_init
+    info_json=$(try_cache 10 "$cache_file" get_info)
+    temp_text=$(extract_temperature_text_from_info_json "$info_json")
+    [ -n "$temp_text" ] || return 1
+    printf '%s\n' "$temp_text"
+}
+
+# Resolve modem temperature in milli-Celsius with fast-path + fallback.
+resolve_modem_temperature_mc() {
+    local section="$1"
+    local temp_text=""
+    local temp_mc=""
+
+    temp_text=$(get_temperature_text_from_vendor)
+    [ -z "$temp_text" ] && temp_text=$(get_temperature_text_from_info "$section")
+    [ -z "$temp_text" ] && return 1
+
+    temp_mc=$(temperature_text_to_mc "$temp_text")
+    [ -n "$temp_mc" ] || return 1
+    printf '%s\n' "$temp_mc"
+}
+
 # Helper function for AT configuration
 get_at_cfg() {
     json_add_object at_cfg
@@ -254,6 +347,9 @@ case "$1" in
     "get_sms": {
         "config_section": "string"
     },
+    "get_temperature": {
+        "config_section": "string"
+    },
     "get_connect_status": {
         "config_section": "string"
     },
@@ -340,6 +436,7 @@ EOF
             base_info|cell_info|info|network_info|sim_info|get_copyright|\
             get_disabled_features|get_dns|get_imei|get_lockband|get_mode|\
             get_neighborcell|get_network_prefer|get_reboot_caps|get_sms|\
+            get_temperature|\
             get_at_cfg|clear_dial_log|dial_status|get_dial_log|get_connect_status|\
             remove_modem|\
             get_sim_switch_capabilities|get_sim_slot)
@@ -457,6 +554,27 @@ EOF
                         ;;
                     get_sms)
                         get_sms 10 "/tmp/cache_sms_$config_section"
+                        ;;
+                    get_temperature)
+                        json_init
+                        if [ -z "$config_section" ]; then
+                            json_add_object error
+                            json_add_string message "config_section is required"
+                            json_close_object
+                            json_dump
+                        else
+                            temp_mC=$(resolve_modem_temperature_mc "$config_section")
+                            if [ -n "$temp_mC" ]; then
+                                json_add_int temp_mC "$temp_mC"
+                                json_add_string source "qmodem"
+                                json_add_string config_section "$config_section"
+                            else
+                                json_add_object error
+                                json_add_string message "temperature unavailable"
+                                json_close_object
+                            fi
+                            json_dump
+                        fi
                         ;;
                     info)
                         json_init

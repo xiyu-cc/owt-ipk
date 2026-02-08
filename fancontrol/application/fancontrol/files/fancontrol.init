@@ -17,14 +17,14 @@ start_service() {
 	config_get_bool enabled main enabled 0
 	[ "$enabled" -eq 1 ] || return 0
 
-	config_get config_file main config_file "/etc/fancontrol"
+	config_get config_file main config_file "/etc/fancontrol.r3mini"
 	config_get_bool debug main debug 0
 	config_get respawn_threshold main respawn_threshold 3600
 	config_get respawn_timeout main respawn_timeout 5
 	config_get respawn_retry main respawn_retry 5
 
 	if [ ! -r "$config_file" ]; then
-		echo "fancontrol: missing $config_file, run pwmconfig first"
+		echo "fancontrol: missing $config_file, generate board config first"
 		return 1
 	fi
 

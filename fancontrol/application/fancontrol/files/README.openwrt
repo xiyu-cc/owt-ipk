@@ -1,12 +1,12 @@
 fancontrol for OpenWrt
 ======================
 
-This package installs the `fancontrol` daemon and `pwmconfig` helper from
-lm-sensors scripts.
+This package installs board-mode `fancontrol` daemon for BPI R3 Mini.
 
 Quick start:
 1. Install required packages and this package.
-2. Run `pwmconfig` to generate `/etc/fancontrol`.
+2. Create `/etc/fancontrol.r3mini` (or use LuCI board editor).
+   For BPI R3 Mini PWM polarity, set `PWM_INVERTED=1` and `PWM_STARTUP_PWM=128`.
 3. Enable and start service:
    /etc/init.d/fancontrol enable
    /etc/init.d/fancontrol start
@@ -14,4 +14,12 @@ Quick start:
 Service configuration:
 - UCI config file: `/etc/config/fancontrol`
 - Main option:
-  option config_file '/etc/fancontrol'
+  option config_file '/etc/fancontrol.r3mini'
+
+Source layout:
+- `src/app/main.cpp`: executable entry
+- `src/libcore/fancontrol_core.*`: board-mode control runtime
+- `src/libcore/board_config.*`: board profile parser
+- `src/libcore/temp_source.*`: sysfs/ubus source abstraction + manager
+- `../docs/ARCHITECTURE.bpi-r3mini.md`: BPI R3 Mini architecture
+- `../docs/fancontrol.r3mini.example`: board profile example
