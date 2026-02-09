@@ -542,14 +542,8 @@ const spec = {
 		this.applyRuntimeStatus(runtimeState, refs);
 		this.startRuntimeAutoRefresh(refs);
 
-		const desc = E('div', { 'class': 'cbi-section-descr' }, [
-			E('p', _('BPI R3 Mini 板级风扇控制向导：写入 /etc/fancontrol.r3mini，支持 SoC / NVMe / RM500 多温度源。')),
-			E('p', _('同一个 PWM 通道只能有一个控制者，避免与内核自动温控冲突。'))
-		]);
-
 		return E('div', { 'class': 'cbi-map' }, [
-			E('h2', _('风扇控制板级编辑器')),
-			desc,
+			E('h2', _('风扇控制')),
 			E('div', { 'class': 'cbi-section' }, [
 				E('div', { 'style': 'margin-bottom:0.7em' }, [
 					E('label', { 'style': 'display:inline-block; min-width:14em' }, _('启用')),
