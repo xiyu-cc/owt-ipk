@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "libcore/json.hpp"
+
 namespace fancontrol::core {
 namespace {
 
@@ -60,8 +62,15 @@ bool to_bool(const std::string &in, const std::string &name) {
     throw std::runtime_error("invalid boolean for " + name + ": " + in);
 }
 
-void clamp_range(int &v, int minv, int maxv) {
-    v = std::max(minv, std::min(v, maxv));
+void validate_json_object_text(const std::string &json_text, const std::string &name) {
+    try {
+        const nlohmann::json parsed = nlohmann::json::parse(json_text);
+        if (!parsed.is_object()) {
+            throw std::runtime_error(name + " must be a JSON object");
+        }
+    } catch (const std::exception &e) {
+        throw std::runtime_error("invalid JSON for " + name + ": " + std::string(e.what()));
+    }
 }
 
 std::unordered_map<std::string, std::string> parse_csv_pairs(const std::string &v) {
@@ -133,6 +142,57 @@ std::unordered_map<std::string, std::string> parse_csv_pairs(const std::string &
     return kv;
 }
 
+std::string strip_inline_comment(const std::string &line) {
+    std::string out;
+    out.reserve(line.size());
+
+    int brace_depth = 0;
+    int bracket_depth = 0;
+    bool in_quote = false;
+    bool escape = false;
+    char quote = '\0';
+
+    for (char ch : line) {
+        if (in_quote) {
+            out.push_back(ch);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (ch == '\\') {
+                escape = true;
+                continue;
+            }
+            if (ch == quote) {
+                in_quote = false;
+            }
+            continue;
+        }
+
+        if (ch == '"' || ch == '\'') {
+            in_quote = true;
+            quote = ch;
+            out.push_back(ch);
+            continue;
+        }
+        if (ch == '{') {
+            ++brace_depth;
+        } else if (ch == '}' && brace_depth > 0) {
+            --brace_depth;
+        } else if (ch == '[') {
+            ++bracket_depth;
+        } else if (ch == ']' && bracket_depth > 0) {
+            --bracket_depth;
+        }
+        if (ch == '#' && brace_depth == 0 && bracket_depth == 0) {
+            break;
+        }
+        out.push_back(ch);
+    }
+
+    return out;
+}
+
 BoardSourceConfig parse_source_line(const std::string &id, const std::string &rhs, int fallback_poll_sec) {
     BoardSourceConfig src;
     src.id = id;
@@ -151,12 +211,14 @@ BoardSourceConfig parse_source_line(const std::string &id, const std::string &rh
     src.t_crit_mC = kv.count("t_crit") ? to_int(kv.at("t_crit"), "t_crit") : 90000;
 
     if (src.poll_sec < 1) {
-        src.poll_sec = 1;
+        throw std::runtime_error("SOURCE_" + id + " poll must be >= 1");
     }
     if (src.ttl_sec < src.poll_sec) {
-        src.ttl_sec = src.poll_sec;
+        throw std::runtime_error("SOURCE_" + id + " ttl must be >= poll");
     }
-    clamp_range(src.weight, 1, 200);
+    if (src.weight < 1 || src.weight > 200) {
+        throw std::runtime_error("SOURCE_" + id + " weight must be in range [1, 200]");
+    }
 
     if (!(src.t_start_mC < src.t_full_mC && src.t_full_mC <= src.t_crit_mC)) {
         throw std::runtime_error("invalid thermal thresholds for SOURCE_" + id);
@@ -175,11 +237,32 @@ BoardSourceConfig parse_source_line(const std::string &id, const std::string &rh
         src.method = kv.at("method");
         src.key = kv.at("key");
         src.args_json = kv.count("args") ? kv.at("args") : "{}";
+        validate_json_object_text(src.args_json, "SOURCE_" + id + " args");
     } else {
         throw std::runtime_error("unsupported source type for SOURCE_" + id + ": " + src.type);
     }
 
     return src;
+}
+
+bool is_known_top_level_key(const std::string &key) {
+    static const std::unordered_set<std::string> known = {
+        "INTERVAL",
+        "PWM_PATH",
+        "PWM_ENABLE_PATH",
+        "THERMAL_MODE_PATH",
+        "PWM_MIN",
+        "PWM_MAX",
+        "PWM_INVERTED",
+        "PWM_STARTUP_PWM",
+        "RAMP_UP",
+        "RAMP_DOWN",
+        "HYSTERESIS_MC",
+        "POLICY",
+        "FAILSAFE_PWM",
+        "PIDFILE",
+    };
+    return known.find(key) != known.end();
 }
 
 } // namespace
@@ -194,11 +277,10 @@ BoardConfig load_board_config(const std::string &path) {
     std::vector<std::pair<std::string, std::string>> sources;
 
     std::string line;
+    int line_no = 0;
     while (std::getline(in, line)) {
-        const auto comment = line.find('#');
-        if (comment != std::string::npos) {
-            line = line.substr(0, comment);
-        }
+        ++line_no;
+        line = strip_inline_comment(line);
         line = trim(line);
         if (line.empty()) {
             continue;
@@ -206,7 +288,7 @@ BoardConfig load_board_config(const std::string &path) {
 
         const std::size_t eq = line.find('=');
         if (eq == std::string::npos) {
-            continue;
+            throw std::runtime_error("invalid config line " + std::to_string(line_no) + ": missing '='");
         }
 
         const std::string key = trim(line.substr(0, eq));
@@ -215,6 +297,12 @@ BoardConfig load_board_config(const std::string &path) {
         if (key.rfind("SOURCE_", 0) == 0 && key.size() > 7) {
             sources.emplace_back(key.substr(7), value);
         } else {
+            if (!is_known_top_level_key(key)) {
+                throw std::runtime_error("unknown top-level key at line " + std::to_string(line_no) + ": " + key);
+            }
+            if (plain.find(key) != plain.end()) {
+                throw std::runtime_error("duplicate top-level key at line " + std::to_string(line_no) + ": " + key);
+            }
             plain[key] = value;
         }
     }
@@ -264,28 +352,31 @@ BoardConfig load_board_config(const std::string &path) {
     }
 
     if (cfg.interval_sec < 1) {
-        cfg.interval_sec = 1;
+        throw std::runtime_error("INTERVAL must be >= 1");
     }
-    clamp_range(cfg.pwm_min, 0, 255);
-    clamp_range(cfg.pwm_max, 0, 255);
-    clamp_range(cfg.failsafe_pwm, 0, 255);
-    if (cfg.pwm_startup_pwm < -1) {
-        cfg.pwm_startup_pwm = -1;
+    if (cfg.pwm_min < 0 || cfg.pwm_min > 255) {
+        throw std::runtime_error("PWM_MIN must be in range [0, 255]");
     }
-    if (cfg.pwm_startup_pwm > 255) {
-        cfg.pwm_startup_pwm = 255;
+    if (cfg.pwm_max < 0 || cfg.pwm_max > 255) {
+        throw std::runtime_error("PWM_MAX must be in range [0, 255]");
     }
     if (cfg.pwm_min > cfg.pwm_max) {
-        cfg.pwm_min = cfg.pwm_max;
+        throw std::runtime_error("PWM_MIN must be <= PWM_MAX");
+    }
+    if (cfg.failsafe_pwm < 0 || cfg.failsafe_pwm > 255) {
+        throw std::runtime_error("FAILSAFE_PWM must be in range [0, 255]");
+    }
+    if (cfg.pwm_startup_pwm < -1 || cfg.pwm_startup_pwm > 255) {
+        throw std::runtime_error("PWM_STARTUP_PWM must be -1 or in range [0, 255]");
     }
     if (cfg.ramp_up < 1) {
-        cfg.ramp_up = 1;
+        throw std::runtime_error("RAMP_UP must be >= 1");
     }
     if (cfg.ramp_down < 1) {
-        cfg.ramp_down = 1;
+        throw std::runtime_error("RAMP_DOWN must be >= 1");
     }
     if (cfg.hysteresis_mC < 0) {
-        cfg.hysteresis_mC = 0;
+        throw std::runtime_error("HYSTERESIS_MC must be >= 0");
     }
 
     if (cfg.pwm_path.empty()) {

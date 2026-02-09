@@ -47,7 +47,7 @@ Safety rules:
 
 ## Suggested board profile defaults
 
-- Loop interval: 2s
+- Loop interval: 1s
 - RM500 poll interval: 8-10s
 - Hysteresis: 2C (2000 mC)
 - Ramp-up: +25 PWM/s
@@ -59,7 +59,7 @@ Safety rules:
 ## Example board config model
 
 ```ini
-INTERVAL=2
+INTERVAL=1
 PWM_PATH=/sys/class/hwmon/hwmon2/pwm1
 PWM_ENABLE_PATH=/sys/class/hwmon/hwmon2/pwm1_enable
 THERMAL_MODE_PATH=/sys/class/thermal/thermal_zone0/mode
@@ -86,3 +86,4 @@ SOURCE_rm500=type=ubus,object=qmodem,method=get_temperature,key=temp_mC,args={"c
 4. Done: integrated `max` demand policy with timeout and critical-temperature fail-safe.
 5. Done: LuCI page can edit and write board profile (`/etc/fancontrol.r3mini`).
 6. Next: add source health/status telemetry in LuCI (last temp, stale flag, poll age).
+7. Done: runtime telemetry exported to `/var/run/fancontrol.status.json` and exposed by LuCI RPC `runtimeStatus`.

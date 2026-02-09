@@ -14,7 +14,7 @@ start_service() {
 	local respawn_threshold respawn_timeout respawn_retry
 
 	config_load fancontrol
-	config_get_bool enabled main enabled 0
+	config_get_bool enabled main enabled 1
 	[ "$enabled" -eq 1 ] || return 0
 
 	config_get config_file main config_file "/etc/fancontrol.r3mini"

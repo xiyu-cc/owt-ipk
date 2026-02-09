@@ -1,26 +1,34 @@
-#include <algorithm>
 #include <cerrno>
 #include <cctype>
 #include <chrono>
-#include <cmath>
 #include <csignal>
 #include <cstring>
 #include <cstdlib>
+#include <fcntl.h>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include "libcore/board_config.hpp"
+#include "libcore/demand_policy.hpp"
 #include "libcore/fancontrol_core.hpp"
+#include "libcore/json.hpp"
+#include "libcore/pwm_controller.hpp"
+#include "libcore/safety_guard.hpp"
 #include "libcore/temp_source.hpp"
 
 namespace {
@@ -28,48 +36,7 @@ namespace {
 volatile std::sig_atomic_t g_stop = 0;
 volatile std::sig_atomic_t g_restore_status = 0;
 
-constexpr int kPwmMax = 255;
-
-int min_cooling_pwm(const fancontrol::core::BoardConfig &cfg) {
-    return cfg.pwm_inverted ? cfg.pwm_max : cfg.pwm_min;
-}
-
-int max_cooling_pwm(const fancontrol::core::BoardConfig &cfg) {
-    return cfg.pwm_inverted ? cfg.pwm_min : cfg.pwm_max;
-}
-
-bool is_stronger_cooling_pwm(int candidate, int baseline, const fancontrol::core::BoardConfig &cfg) {
-    if (cfg.pwm_inverted) {
-        return candidate < baseline;
-    }
-    return candidate > baseline;
-}
-
-int stronger_cooling_pwm(int lhs, int rhs, const fancontrol::core::BoardConfig &cfg) {
-    return is_stronger_cooling_pwm(rhs, lhs, cfg) ? rhs : lhs;
-}
-
-int clamp_pwm(const fancontrol::core::BoardConfig &cfg, int pwm) {
-    return std::clamp(pwm, cfg.pwm_min, cfg.pwm_max);
-}
-
-int apply_startup_boost(const fancontrol::core::BoardConfig &cfg, int target_pwm, int current_pwm) {
-    if (cfg.pwm_startup_pwm < 0) {
-        return target_pwm;
-    }
-
-    const int startup_pwm = clamp_pwm(cfg, cfg.pwm_startup_pwm);
-    const int idle_pwm = min_cooling_pwm(cfg);
-
-    const bool requesting_active_cooling = is_stronger_cooling_pwm(target_pwm, idle_pwm, cfg);
-    const bool startup_stronger_than_target = is_stronger_cooling_pwm(startup_pwm, target_pwm, cfg);
-    const bool current_weaker_than_startup = is_stronger_cooling_pwm(startup_pwm, current_pwm, cfg);
-
-    if (requesting_active_cooling && startup_stronger_than_target && current_weaker_than_startup) {
-        return startup_pwm;
-    }
-    return target_pwm;
-}
+constexpr std::string_view kRuntimeStatusPath = "/var/run/fancontrol.status.json";
 
 void on_signal(int sig) {
     switch (sig) {
@@ -139,15 +106,6 @@ bool try_write_int(const std::string &path, int value) {
     return out.good();
 }
 
-bool try_write_text(const std::string &path, const std::string &value) {
-    std::ofstream out(path);
-    if (!out) {
-        return false;
-    }
-    out << value << '\n';
-    return out.good();
-}
-
 std::optional<pid_t> try_read_pid(const std::string &path) {
     std::ifstream in(path);
     if (!in) {
@@ -164,186 +122,171 @@ std::optional<pid_t> try_read_pid(const std::string &path) {
     return static_cast<pid_t>(pid);
 }
 
-bool pid_is_alive(pid_t pid) {
-    if (pid <= 0) {
-        return false;
-    }
-    if (::kill(pid, 0) == 0) {
-        return true;
-    }
-    return errno == EPERM;
-}
-
-void ensure_pidfile_available(const std::string &pidfile) {
-    if (!file_exists(pidfile)) {
-        return;
-    }
-
-    const auto existing_pid = try_read_pid(pidfile);
-    if (existing_pid && pid_is_alive(*existing_pid)) {
-        throw std::runtime_error("File " + pidfile + " exists and process " +
-                                 std::to_string(*existing_pid) + " is running, is fancontrol already running?");
-    }
-
-    if (::unlink(pidfile.c_str()) != 0 && errno != ENOENT) {
-        std::string msg = "stale pidfile " + pidfile + " cannot be removed: " + std::strerror(errno);
-        if (existing_pid) {
-            msg = "stale pidfile " + pidfile + " (pid " + std::to_string(*existing_pid) +
-                  ") cannot be removed: " + std::strerror(errno);
+class InstanceLock {
+public:
+    explicit InstanceLock(const std::string &pidfile) : lockfile_(pidfile + ".lock") {
+        fd_ = ::open(lockfile_.c_str(), O_CREAT | O_RDWR, 0644);
+        if (fd_ < 0) {
+            throw std::runtime_error("cannot open lock file " + lockfile_ + ": " + std::strerror(errno));
         }
-        throw std::runtime_error(msg);
-    }
-}
 
-void remove_pidfile(const std::string &pidfile) {
-    (void)::unlink(pidfile.c_str());
-}
+        if (::flock(fd_, LOCK_EX | LOCK_NB) != 0) {
+            const int err = errno;
+            std::string msg = "cannot acquire lock " + lockfile_ + ": " + std::strerror(err);
+            const auto existing_pid = try_read_pid(pidfile);
+            if (existing_pid) {
+                msg += " (existing pidfile pid " + std::to_string(*existing_pid) + ")";
+            }
+            ::close(fd_);
+            fd_ = -1;
+            throw std::runtime_error(msg);
+        }
+    }
+
+    ~InstanceLock() {
+        if (fd_ >= 0) {
+            (void)::flock(fd_, LOCK_UN);
+            (void)::close(fd_);
+        }
+    }
+
+    InstanceLock(const InstanceLock &) = delete;
+    InstanceLock &operator=(const InstanceLock &) = delete;
+
+private:
+    int fd_ = -1;
+    std::string lockfile_;
+};
 
 struct BoardPwmSnapshot {
     std::optional<int> orig_pwm;
+    std::optional<int> orig_enable;
     bool has_enable = false;
-};
-
-struct BoardThermalSnapshot {
-    std::optional<std::string> orig_mode;
 };
 
 bool setup_board_pwm(const fancontrol::core::BoardConfig &cfg, BoardPwmSnapshot &snap, bool debug) {
     snap.orig_pwm = try_read_int(cfg.pwm_path);
     snap.has_enable = file_exists(cfg.pwm_enable_path);
+    if (snap.has_enable) {
+        snap.orig_enable = try_read_int(cfg.pwm_enable_path);
+    }
 
-    if (debug) {
-        if (snap.orig_pwm) {
-            std::cerr << "Saving " << cfg.pwm_path << " original value as " << *snap.orig_pwm << "\n";
-        }
+    if (debug && snap.orig_pwm) {
+        std::cerr << "Saving " << cfg.pwm_path << " original value as " << *snap.orig_pwm << "\n";
     }
 
     if (snap.has_enable && !try_write_int(cfg.pwm_enable_path, 1)) {
         return false;
     }
 
-    return try_write_int(cfg.pwm_path, max_cooling_pwm(cfg));
-}
-
-void restore_board_pwm(const fancontrol::core::BoardConfig &cfg, const BoardPwmSnapshot &snap, bool debug) {
-    if (snap.orig_pwm) {
-        if (debug) {
-            std::cerr << "Restoring " << cfg.pwm_path << " original value of " << *snap.orig_pwm << "\n";
-        }
-        (void)try_write_int(cfg.pwm_path, *snap.orig_pwm);
-    } else {
-        (void)try_write_int(cfg.pwm_path, max_cooling_pwm(cfg));
-    }
-
-    if (snap.has_enable) {
-        if (debug) {
-            std::cerr << "Setting " << cfg.pwm_enable_path << " to manual mode (1) for kernel handover\n";
-        }
-        if (!try_write_int(cfg.pwm_enable_path, 1)) {
-            (void)try_write_int(cfg.pwm_enable_path, 1);
-            (void)try_write_int(cfg.pwm_path, max_cooling_pwm(cfg));
-        }
-    }
-}
-
-bool setup_board_thermal(const fancontrol::core::BoardConfig &cfg, BoardThermalSnapshot &snap, bool debug) {
-    snap.orig_mode = try_read_text(cfg.thermal_mode_path);
-    if (debug && snap.orig_mode) {
-        std::cerr << "Saving " << cfg.thermal_mode_path << " original value as " << *snap.orig_mode << "\n";
-    }
-    if (!try_write_text(cfg.thermal_mode_path, "disabled")) {
-        return false;
-    }
-    if (debug) {
-        std::cerr << "Set " << cfg.thermal_mode_path << " to disabled (fancontrol owns PWM)\n";
+    if (debug && snap.has_enable) {
+        std::cerr << "Set " << cfg.pwm_enable_path << " to 1\n";
     }
     return true;
 }
 
-void restore_board_thermal(const fancontrol::core::BoardConfig &cfg, const BoardThermalSnapshot &snap, bool debug) {
-    std::string target_mode = "enabled";
-    if (snap.orig_mode && !snap.orig_mode->empty()) {
-        target_mode = *snap.orig_mode;
-    }
-
-    if (debug) {
-        std::cerr << "Restoring " << cfg.thermal_mode_path << " to " << target_mode << "\n";
-    }
-    if (!try_write_text(cfg.thermal_mode_path, target_mode)) {
-        std::cerr << "Warning: failed to restore " << cfg.thermal_mode_path << " to " << target_mode << "\n";
+void restore_board_pwm(const fancontrol::core::BoardConfig &cfg, const BoardPwmSnapshot &snap, bool debug) {
+    if (snap.has_enable) {
+        const int enable_to_restore = snap.orig_enable.value_or(0);
+        if (debug) {
+            std::cerr << "Restoring " << cfg.pwm_enable_path << " to " << enable_to_restore << "\n";
+        }
+        if (!try_write_int(cfg.pwm_enable_path, enable_to_restore)) {
+            (void)try_write_int(cfg.pwm_enable_path, enable_to_restore);
+            (void)try_write_int(cfg.pwm_path, fancontrol::core::max_cooling_pwm(cfg));
+        }
     }
 }
 
-int apply_ramp(int current_pwm, int target_pwm, const fancontrol::core::BoardConfig &cfg) {
-    if (target_pwm == current_pwm) {
-        return current_pwm;
-    }
-
-    if (is_stronger_cooling_pwm(target_pwm, current_pwm, cfg)) {
-        if (cfg.pwm_inverted) {
-            return std::max(target_pwm, current_pwm - cfg.ramp_up);
+class PidfileGuard {
+public:
+    explicit PidfileGuard(std::string pidfile) : pidfile_(std::move(pidfile)) {
+        std::ofstream pid(pidfile_);
+        if (!pid) {
+            throw std::runtime_error("cannot create pidfile: " + pidfile_);
         }
-        return std::min(target_pwm, current_pwm + cfg.ramp_up);
-    }
-
-    if (cfg.pwm_inverted) {
-        return std::min(target_pwm, current_pwm + cfg.ramp_down);
-    }
-    return std::max(target_pwm, current_pwm - cfg.ramp_down);
-}
-
-int demand_from_source(const fancontrol::core::BoardConfig &cfg,
-                       const fancontrol::core::BoardSourceConfig &src,
-                       int temp_mC,
-                       bool &active,
-                       bool &critical) {
-    const int idle_pwm = min_cooling_pwm(cfg);
-    const int full_pwm = max_cooling_pwm(cfg);
-
-    if (temp_mC >= src.t_crit_mC) {
-        critical = true;
-        active = true;
-        return full_pwm;
-    }
-
-    const int on_threshold = src.t_start_mC + cfg.hysteresis_mC;
-    const int off_threshold = src.t_start_mC - cfg.hysteresis_mC;
-
-    if (!active) {
-        if (temp_mC < on_threshold) {
-            return idle_pwm;
-        }
-        active = true;
-    } else {
-        if (temp_mC <= off_threshold) {
-            active = false;
-            return idle_pwm;
+        pid << ::getpid() << '\n';
+        if (!pid.good()) {
+            throw std::runtime_error("cannot write pidfile: " + pidfile_);
         }
     }
 
-    double ratio = 0.0;
-    if (temp_mC <= src.t_start_mC) {
-        ratio = 0.0;
-    } else if (temp_mC >= src.t_full_mC) {
-        ratio = 1.0;
-    } else {
-        ratio = static_cast<double>(temp_mC - src.t_start_mC) /
-                static_cast<double>(src.t_full_mC - src.t_start_mC);
+    ~PidfileGuard() {
+        (void)::unlink(pidfile_.c_str());
     }
 
-    ratio *= static_cast<double>(src.weight) / 100.0;
-    ratio = std::clamp(ratio, 0.0, 1.0);
+    PidfileGuard(const PidfileGuard &) = delete;
+    PidfileGuard &operator=(const PidfileGuard &) = delete;
 
-    const int span = cfg.pwm_max - cfg.pwm_min;
-    int demand = idle_pwm;
-    if (cfg.pwm_inverted) {
-        demand = cfg.pwm_max - static_cast<int>(std::lround(ratio * static_cast<double>(span)));
-    } else {
-        demand = cfg.pwm_min + static_cast<int>(std::lround(ratio * static_cast<double>(span)));
+private:
+    std::string pidfile_;
+};
+
+class BoardPwmGuard {
+public:
+    BoardPwmGuard(const fancontrol::core::BoardConfig &cfg, bool debug) : cfg_(cfg), debug_(debug) {
+        if (!setup_board_pwm(cfg_, snapshot_, debug_)) {
+            throw std::runtime_error("failed to enable PWM in board mode");
+        }
+        armed_ = true;
     }
-    demand = clamp_pwm(cfg, demand);
-    return demand;
-}
+
+    ~BoardPwmGuard() {
+        if (armed_) {
+            restore_board_pwm(cfg_, snapshot_, debug_);
+        }
+    }
+
+    BoardPwmGuard(const BoardPwmGuard &) = delete;
+    BoardPwmGuard &operator=(const BoardPwmGuard &) = delete;
+
+private:
+    const fancontrol::core::BoardConfig &cfg_;
+    BoardPwmSnapshot snapshot_;
+    bool debug_ = false;
+    bool armed_ = false;
+};
+
+class RuntimeStatusGuard {
+public:
+    explicit RuntimeStatusGuard(std::string path) : path_(std::move(path)) {}
+
+    ~RuntimeStatusGuard() {
+        (void)::unlink(path_.c_str());
+    }
+
+    bool write(const std::string &payload) const {
+        return fancontrol::core::write_runtime_status_file(path_, payload);
+    }
+
+    RuntimeStatusGuard(const RuntimeStatusGuard &) = delete;
+    RuntimeStatusGuard &operator=(const RuntimeStatusGuard &) = delete;
+
+private:
+    std::string path_;
+};
+
+class BoardOwnershipGuard {
+public:
+    BoardOwnershipGuard(const fancontrol::core::BoardConfig &cfg, bool debug)
+        : instance_lock_(cfg.pidfile),
+          pidfile_guard_(cfg.pidfile),
+          pwm_guard_(cfg, debug),
+          status_guard_(std::string(kRuntimeStatusPath)) {}
+
+    bool write_runtime_status(const std::string &payload) const {
+        return status_guard_.write(payload);
+    }
+
+    BoardOwnershipGuard(const BoardOwnershipGuard &) = delete;
+    BoardOwnershipGuard &operator=(const BoardOwnershipGuard &) = delete;
+
+private:
+    InstanceLock instance_lock_;
+    PidfileGuard pidfile_guard_;
+    BoardPwmGuard pwm_guard_;
+    RuntimeStatusGuard status_guard_;
+};
 
 bool create_board_sources(const fancontrol::core::BoardConfig &cfg,
                           fancontrol::core::SourceManager &mgr,
@@ -364,69 +307,6 @@ bool create_board_sources(const fancontrol::core::BoardConfig &cfg,
     return true;
 }
 
-int compute_board_target(const fancontrol::core::BoardConfig &cfg,
-                         const fancontrol::core::SourceManager &mgr,
-                         std::unordered_map<std::string, fancontrol::core::BoardSourceConfig> &by_id,
-                         std::unordered_map<std::string, bool> &active_state,
-                         bool debug) {
-    const auto now = std::chrono::steady_clock::now();
-
-    int target = min_cooling_pwm(cfg);
-    bool any_valid = false;
-    bool any_timeout = false;
-    bool critical = false;
-
-    for (const auto &rt : mgr.runtimes()) {
-        if (!rt.source) {
-            continue;
-        }
-
-        const std::string sid = rt.source->id();
-        if (!by_id.count(sid)) {
-            continue;
-        }
-        const auto &src = by_id[sid];
-
-        if (!rt.last_sample || !rt.last_sample->ok) {
-            if (rt.has_polled) {
-                any_timeout = true;
-            }
-            continue;
-        }
-
-        const auto age = std::chrono::duration_cast<std::chrono::seconds>(now - rt.last_sample->sample_ts).count();
-        if (age > src.ttl_sec) {
-            any_timeout = true;
-            if (debug) {
-                std::cerr << "source[" << sid << "] stale age=" << age << "s ttl=" << src.ttl_sec << "s\n";
-            }
-            continue;
-        }
-
-        any_valid = true;
-        bool &active = active_state[sid];
-        const int source_demand = demand_from_source(cfg, src, rt.last_sample->temp_mC, active, critical);
-        target = stronger_cooling_pwm(target, source_demand, cfg);
-
-        if (debug) {
-            std::cerr << "source[" << sid << "] temp=" << rt.last_sample->temp_mC
-                      << " demand=" << source_demand << " active=" << (active ? 1 : 0) << "\n";
-        }
-    }
-
-    if (critical) {
-        target = max_cooling_pwm(cfg);
-    }
-    if (!any_valid) {
-        target = max_cooling_pwm(cfg);
-    }
-    if (any_timeout) {
-        target = stronger_cooling_pwm(target, clamp_pwm(cfg, cfg.failsafe_pwm), cfg);
-    }
-
-    return clamp_pwm(cfg, target);
-}
-
 int run_board_mode(const fancontrol::core::BoardConfig &cfg, bool debug) {
     if (::access(cfg.pwm_path.c_str(), W_OK) != 0) {
         throw std::runtime_error("PWM path is not writable: " + cfg.pwm_path);
@@ -434,53 +314,48 @@ int run_board_mode(const fancontrol::core::BoardConfig &cfg, bool debug) {
     if (file_exists(cfg.pwm_enable_path) && ::access(cfg.pwm_enable_path.c_str(), W_OK) != 0) {
         throw std::runtime_error("PWM enable path is not writable: " + cfg.pwm_enable_path);
     }
-    if (::access(cfg.thermal_mode_path.c_str(), W_OK) != 0) {
-        throw std::runtime_error("thermal mode path is not writable: " + cfg.thermal_mode_path);
+    if (::access(cfg.thermal_mode_path.c_str(), R_OK) != 0) {
+        throw std::runtime_error("thermal mode path is not readable: " + cfg.thermal_mode_path);
     }
 
-    ensure_pidfile_available(cfg.pidfile);
-
-    {
-        std::ofstream pid(cfg.pidfile);
-        if (!pid) {
-            throw std::runtime_error("cannot create pidfile: " + cfg.pidfile);
-        }
-        pid << ::getpid() << '\n';
-    }
-
-    BoardThermalSnapshot thermal_snapshot;
-    if (!setup_board_thermal(cfg, thermal_snapshot, debug)) {
-        remove_pidfile(cfg.pidfile);
-        throw std::runtime_error("failed to disable kernel thermal control");
-    }
-
-    BoardPwmSnapshot pwm_snapshot;
-    if (!setup_board_pwm(cfg, pwm_snapshot, debug)) {
-        restore_board_thermal(cfg, thermal_snapshot, debug);
-        remove_pidfile(cfg.pidfile);
-        throw std::runtime_error("failed to enable PWM in board mode");
-    }
+    BoardOwnershipGuard ownership_guard(cfg, debug);
 
     fancontrol::core::SourceManager mgr;
     std::unordered_map<std::string, fancontrol::core::BoardSourceConfig> by_id;
     if (!create_board_sources(cfg, mgr, by_id)) {
-        restore_board_pwm(cfg, pwm_snapshot, debug);
-        restore_board_thermal(cfg, thermal_snapshot, debug);
-        remove_pidfile(cfg.pidfile);
         throw std::runtime_error("failed to create temperature sources");
     }
 
     std::unordered_map<std::string, bool> active_state;
-    int current_pwm = try_read_int(cfg.pwm_path).value_or(max_cooling_pwm(cfg));
+    int current_pwm = try_read_int(cfg.pwm_path).value_or(fancontrol::core::min_cooling_pwm(cfg));
+    std::optional<bool> last_fancontrol_owner;
+    mgr.start(debug);
+    std::cerr << "Starting board-mode fan control...\n";
+    while (!g_stop) {
+        const std::string thermal_mode = try_read_text(cfg.thermal_mode_path).value_or("");
+        const bool fancontrol_owns_pwm = (thermal_mode == "disabled");
+        if (!last_fancontrol_owner || *last_fancontrol_owner != fancontrol_owns_pwm) {
+            if (debug) {
+                std::cerr << "control owner changed: "
+                          << (fancontrol_owns_pwm ? "fancontrol" : "kernel")
+                          << " (thermal mode=" << (thermal_mode.empty() ? "<unknown>" : thermal_mode) << ")\n";
+            }
+            last_fancontrol_owner = fancontrol_owns_pwm;
+        }
 
-    try {
-        std::cerr << "Starting board-mode fan control...\n";
-        while (!g_stop) {
-            mgr.poll(debug);
+        std::vector<fancontrol::core::SourceTelemetry> telemetry;
+        const fancontrol::core::TargetDecision decision = fancontrol::core::compute_target_decision(
+            cfg, mgr, by_id, active_state, telemetry, debug);
+        const int target = decision.target_pwm;
 
-            const int target = compute_board_target(cfg, mgr, by_id, active_state, debug);
-            int next_pwm = apply_ramp(current_pwm, target, cfg);
-            next_pwm = apply_startup_boost(cfg, next_pwm, current_pwm);
+        if (const auto observed_pwm = try_read_int(cfg.pwm_path)) {
+            current_pwm = *observed_pwm;
+        }
+
+        int applied_pwm = current_pwm;
+        if (fancontrol_owns_pwm) {
+            int next_pwm = fancontrol::core::apply_ramp(current_pwm, target, cfg);
+            next_pwm = fancontrol::core::apply_startup_boost(cfg, next_pwm, current_pwm);
 
             if (next_pwm != current_pwm) {
                 if (!try_write_int(cfg.pwm_path, next_pwm)) {
@@ -491,38 +366,80 @@ int run_board_mode(const fancontrol::core::BoardConfig &cfg, bool debug) {
                     std::cerr << "board pwm target=" << target << " applied=" << current_pwm << "\n";
                 }
             }
-
-            for (int i = 0; i < cfg.interval_sec && !g_stop; ++i) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
+            applied_pwm = current_pwm;
         }
-    } catch (...) {
-        restore_board_pwm(cfg, pwm_snapshot, debug);
-        restore_board_thermal(cfg, thermal_snapshot, debug);
-        remove_pidfile(cfg.pidfile);
-        throw;
+
+        const std::string status_payload =
+            fancontrol::core::build_runtime_status_json(cfg, decision, current_pwm, target, applied_pwm, telemetry);
+        if (!ownership_guard.write_runtime_status(status_payload) && debug) {
+            std::cerr << "warning: failed to write runtime status to " << kRuntimeStatusPath << "\n";
+        }
+
+        for (int i = 0; i < cfg.interval_sec && !g_stop; ++i) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
     }
 
-    restore_board_pwm(cfg, pwm_snapshot, debug);
-    restore_board_thermal(cfg, thermal_snapshot, debug);
-    remove_pidfile(cfg.pidfile);
     return (g_restore_status == 0) ? 0 : 1;
 }
 
-std::string pick_config_path(int argc, char **argv) {
-    if (argc > 1) {
-        return argv[1];
+std::string pick_config_path(const std::vector<std::string> &args, std::size_t offset) {
+    if (args.size() > offset) {
+        return args[offset];
     }
     return "/etc/fancontrol.r3mini";
+}
+
+std::string build_board_config_json(const fancontrol::core::BoardConfig &cfg, const std::string &path) {
+    nlohmann::json root = {
+        {"ok", 1},
+        {"path", path},
+        {"exists", 1},
+        {"interval", cfg.interval_sec},
+        {"pwm_path", cfg.pwm_path},
+        {"pwm_enable_path", cfg.pwm_enable_path},
+        {"thermal_mode_path", cfg.thermal_mode_path},
+        {"pwm_min", cfg.pwm_min},
+        {"pwm_max", cfg.pwm_max},
+        {"pwm_inverted", cfg.pwm_inverted ? 1 : 0},
+        {"pwm_startup_pwm", cfg.pwm_startup_pwm},
+        {"ramp_up", cfg.ramp_up},
+        {"ramp_down", cfg.ramp_down},
+        {"hysteresis_mC", cfg.hysteresis_mC},
+        {"policy", cfg.policy},
+        {"failsafe_pwm", cfg.failsafe_pwm},
+        {"pidfile", cfg.pidfile},
+        {"sources", nlohmann::json::array()}
+    };
+
+    for (const auto &src : cfg.sources) {
+        root["sources"].push_back({
+            {"id", src.id},
+            {"type", src.type},
+            {"path", src.path},
+            {"object", src.object},
+            {"method", src.method},
+            {"key", src.key},
+            {"args", src.args_json},
+            {"t_start", src.t_start_mC},
+            {"t_full", src.t_full_mC},
+            {"t_crit", src.t_crit_mC},
+            {"ttl", src.ttl_sec},
+            {"poll", src.poll_sec},
+            {"weight", src.weight}
+        });
+    }
+
+    return root.dump();
 }
 
 } // namespace
 
 namespace fancontrol::core {
 
-int run(int argc, char **argv) {
+int run(const std::vector<std::string> &args) {
     const bool debug = []() {
-        const char *d = std::getenv("DEBUG");
+        const auto d = std::getenv("DEBUG");
         return d && *d && std::string(d) != "0";
     }();
 
@@ -532,8 +449,25 @@ int run(int argc, char **argv) {
     std::signal(SIGQUIT, on_signal);
 
     try {
-        const std::string config = pick_config_path(argc, argv);
+        if (args.size() > 1 && args[1] == "--validate-config") {
+            const std::string config = pick_config_path(args, 2);
+            const BoardConfig bcfg = load_board_config(config);
+            (void)bcfg;
+            std::cerr << "fancontrol: config validation passed for " << config << "\n";
+            return 0;
+        }
+        if (args.size() > 1 && args[1] == "--dump-config-json") {
+            const std::string config = pick_config_path(args, 2);
+            const BoardConfig bcfg = load_board_config(config);
+            std::cout << build_board_config_json(bcfg, config) << '\n';
+            return 0;
+        }
+
+        const std::string config = pick_config_path(args, 1);
         std::cerr << "Loading board configuration from " << config << " ...\n";
+
+        g_stop = 0;
+        g_restore_status = 0;
 
         const BoardConfig bcfg = load_board_config(config);
         return run_board_mode(bcfg, debug);

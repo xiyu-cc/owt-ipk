@@ -1,9 +1,12 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fancontrol::core {
@@ -15,12 +18,20 @@ struct TempSample {
     std::string error;
 };
 
+struct SourceSnapshot {
+    bool has_polled = false;
+    std::optional<TempSample> last_sample;
+    std::optional<TempSample> last_good_sample;
+};
+
 class ITempSource {
 public:
     virtual ~ITempSource() = default;
     virtual const std::string &id() const = 0;
     virtual std::chrono::seconds poll_interval() const = 0;
-    virtual TempSample sample() = 0;
+    virtual void sample() = 0;
+    virtual void publish_failure(const std::string &error) = 0;
+    virtual SourceSnapshot snapshot() const = 0;
 };
 
 class SysfsTempSource : public ITempSource {
@@ -29,12 +40,20 @@ public:
 
     const std::string &id() const override;
     std::chrono::seconds poll_interval() const override;
-    TempSample sample() override;
+    void sample() override;
+    void publish_failure(const std::string &error) override;
+    SourceSnapshot snapshot() const override;
 
 private:
+    void store_sample(TempSample sample);
+
     std::string id_;
     std::string path_;
     std::chrono::seconds poll_interval_;
+    mutable std::mutex sample_mutex_;
+    std::optional<TempSample> last_sample_;
+    std::optional<TempSample> last_good_sample_;
+    bool has_polled_ = false;
 };
 
 class UbusTempSource : public ITempSource {
@@ -48,32 +67,46 @@ public:
 
     const std::string &id() const override;
     std::chrono::seconds poll_interval() const override;
-    TempSample sample() override;
+    void sample() override;
+    void publish_failure(const std::string &error) override;
+    SourceSnapshot snapshot() const override;
 
 private:
+    void store_sample(TempSample sample);
+
     std::string id_;
     std::string object_;
     std::string method_;
     std::string key_;
     std::string args_json_;
     std::chrono::seconds poll_interval_;
+    int ubus_timeout_ms_ = 2000;
+    mutable std::mutex sample_mutex_;
+    std::optional<TempSample> last_sample_;
+    std::optional<TempSample> last_good_sample_;
+    bool has_polled_ = false;
 };
 
 struct SourceRuntime {
     std::unique_ptr<ITempSource> source;
-    std::optional<TempSample> last_sample;
-    std::chrono::steady_clock::time_point last_poll;
-    bool has_polled = false;
+    std::thread worker;
 };
 
 class SourceManager {
 public:
+    ~SourceManager();
     void add(std::unique_ptr<ITempSource> source);
-    void poll(bool debug);
-    const std::vector<SourceRuntime> &runtimes() const;
+    void start(bool debug);
+    void stop();
+    const std::vector<std::shared_ptr<SourceRuntime>> &runtimes() const;
 
 private:
-    std::vector<SourceRuntime> runtimes_;
+    void run_source_loop(SourceRuntime &rt, bool debug);
+
+    std::vector<std::shared_ptr<SourceRuntime>> runtimes_;
+    mutable std::mutex state_mutex_;
+    std::condition_variable state_cv_;
+    bool running_ = false;
 };
 
 } // namespace fancontrol::core

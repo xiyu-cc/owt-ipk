@@ -1,6 +1,6 @@
 {
   "admin/services/fancontrol": {
-    "title": "Fan Control",
+    "title": "风扇控制",
     "order": 90,
     "action": {
       "type": "view",
@@ -11,4 +11,3 @@
     }
   }
 }
-

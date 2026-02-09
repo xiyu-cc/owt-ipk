@@ -22,4 +22,4 @@ Source layout:
 - `src/libcore/board_config.*`: board profile parser
 - `src/libcore/temp_source.*`: sysfs/ubus source abstraction + manager
 - `../docs/ARCHITECTURE.bpi-r3mini.md`: BPI R3 Mini architecture
-- `../docs/fancontrol.r3mini.example`: board profile example
+- `./fancontrol.r3mini`: board profile example

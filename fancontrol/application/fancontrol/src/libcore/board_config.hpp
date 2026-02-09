@@ -25,7 +25,7 @@ struct BoardSourceConfig {
 };
 
 struct BoardConfig {
-    int interval_sec = 2;
+    int interval_sec = 1;
 
     std::string pwm_path;
     std::string pwm_enable_path;
