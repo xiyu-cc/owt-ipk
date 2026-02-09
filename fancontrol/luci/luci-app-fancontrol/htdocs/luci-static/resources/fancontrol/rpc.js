@@ -19,7 +19,7 @@ const callApplyBoardConfig = rpc.declare({
 	params: [
 		'output', 'interval', 'pwm_path', 'pwm_enable_path', 'thermal_mode_path',
 		'pwm_min', 'pwm_max', 'pwm_inverted', 'pwm_startup_pwm', 'ramp_up', 'ramp_down',
-		'hysteresis_mC', 'policy', 'failsafe_pwm', 'pidfile', 'entries'
+		'hysteresis_mC', 'policy', 'failsafe_pwm', 'entries'
 	]
 });
 
@@ -107,7 +107,6 @@ function applyBoardConfig(payload) {
 		p.hysteresis_mC,
 		p.policy,
 		p.failsafe_pwm,
-		p.pidfile,
 		p.entries
 	);
 }

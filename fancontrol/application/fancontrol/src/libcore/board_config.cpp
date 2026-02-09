@@ -260,7 +260,6 @@ bool is_known_top_level_key(const std::string &key) {
         "HYSTERESIS_MC",
         "POLICY",
         "FAILSAFE_PWM",
-        "PIDFILE",
     };
     return known.find(key) != known.end();
 }
@@ -347,10 +346,6 @@ BoardConfig load_board_config(const std::string &path) {
     if (plain.count("FAILSAFE_PWM")) {
         cfg.failsafe_pwm = to_int(plain["FAILSAFE_PWM"], "FAILSAFE_PWM");
     }
-    if (plain.count("PIDFILE")) {
-        cfg.pidfile = plain["PIDFILE"];
-    }
-
     if (cfg.interval_sec < 1) {
         throw std::runtime_error("INTERVAL must be >= 1");
     }

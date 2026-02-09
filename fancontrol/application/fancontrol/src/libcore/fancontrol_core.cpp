@@ -269,8 +269,8 @@ private:
 class BoardOwnershipGuard {
 public:
     BoardOwnershipGuard(const fancontrol::core::BoardConfig &cfg, bool debug)
-        : instance_lock_(cfg.pidfile),
-          pidfile_guard_(cfg.pidfile),
+        : instance_lock_(fancontrol::core::kFixedPidfilePath),
+          pidfile_guard_(fancontrol::core::kFixedPidfilePath),
           pwm_guard_(cfg, debug),
           status_guard_(std::string(kRuntimeStatusPath)) {}
 
@@ -408,7 +408,6 @@ std::string build_board_config_json(const fancontrol::core::BoardConfig &cfg, co
         {"hysteresis_mC", cfg.hysteresis_mC},
         {"policy", cfg.policy},
         {"failsafe_pwm", cfg.failsafe_pwm},
-        {"pidfile", cfg.pidfile},
         {"sources", nlohmann::json::array()}
     };
 

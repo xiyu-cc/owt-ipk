@@ -59,12 +59,18 @@ if ! uci -q get fancontrol.main >/dev/null 2>&1; then
 set fancontrol.main=fancontrol
 set fancontrol.main.enabled='1'
 set fancontrol.main.config_file='/etc/fancontrol.r3mini'
+set fancontrol.main.control_mode='kernel'
 set fancontrol.main.debug='0'
 set fancontrol.main.respawn_threshold='3600'
 set fancontrol.main.respawn_timeout='5'
 set fancontrol.main.respawn_retry='5'
 commit fancontrol
 EOF
+fi
+
+if [ -z "$$(uci -q get fancontrol.main.control_mode)" ]; then
+	uci -q set fancontrol.main.control_mode='kernel'
+	uci -q commit fancontrol
 fi
 
 enabled="$$(uci -q get fancontrol.main.enabled)"

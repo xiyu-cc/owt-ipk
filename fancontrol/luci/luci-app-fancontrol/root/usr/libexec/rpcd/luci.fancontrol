@@ -2,10 +2,12 @@
 
 . /usr/share/libubox/jshn.sh
 
+MIN_PWM=0
 MAX_PWM=255
 HWMON_ROOT="/sys/class/hwmon"
 THERMAL_MODE_PATH_DEFAULT="/sys/class/thermal/thermal_zone0/mode"
 RUNTIME_STATUS_FILE_DEFAULT="/var/run/fancontrol.status.json"
+PIDFILE_DEFAULT="/var/run/fancontrol.pid"
 
 sanitize_name() {
 	echo "$1" | sed 's/[[:space:]=]/_/g'
@@ -124,6 +126,15 @@ resolve_config_file() {
 	echo "$path"
 }
 
+resolve_active_config_file() {
+	local path
+
+	path="$(uci -q get fancontrol.main.config_file 2>/dev/null)"
+	path="$(sanitize_field "$path")"
+	[ -n "$path" ] || path="/etc/fancontrol.r3mini"
+	echo "$path"
+}
+
 resolve_thermal_mode_path() {
 	local config_file="$1"
 	local mode_path=""
@@ -156,7 +167,7 @@ pidfile_is_running() {
 	local pidfile="$1"
 	local pid=""
 
-	[ -n "$pidfile" ] || pidfile="/var/run/fancontrol.pid"
+	[ -n "$pidfile" ] || return 1
 	[ -r "$pidfile" ] || return 1
 	IFS= read -r pid < "$pidfile" || return 1
 	case "$pid" in
@@ -209,6 +220,25 @@ wait_service_running() {
 	service_is_running "$pidfile"
 }
 
+wait_thermal_mode() {
+	local thermal_mode_path="$1"
+	local target="$2"
+	local timeout="$3"
+	local i=0
+	local current=""
+
+	[ -n "$timeout" ] || timeout=5
+	while [ "$i" -lt "$timeout" ]; do
+		current="$(read_text_value "$thermal_mode_path" 2>/dev/null || true)"
+		[ "$current" = "$target" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+
+	current="$(read_text_value "$thermal_mode_path" 2>/dev/null || true)"
+	[ "$current" = "$target" ]
+}
+
 diagnose_fancontrol_start_failure() {
 	local config_file="$1"
 	local thermal_mode_path="$2"
@@ -246,27 +276,22 @@ diagnose_fancontrol_start_failure() {
 }
 
 resolve_pidfile_path() {
-	local config_file="$1"
-	local pidfile=""
-	local payload=""
-
-	if [ -n "$config_file" ] && [ -r "$config_file" ] && [ -x /usr/sbin/fancontrol ]; then
-		payload="$(/usr/sbin/fancontrol --dump-config-json "$config_file" 2>/dev/null)"
-		if [ -n "$payload" ] && json_load "$payload" >/dev/null 2>&1; then
-			json_get_var pidfile pidfile
-			json_cleanup
-			pidfile="$(sanitize_field "$pidfile")"
-		fi
-	fi
-	[ -n "$pidfile" ] || pidfile="/var/run/fancontrol.pid"
-	echo "$pidfile"
+	echo "$PIDFILE_DEFAULT"
 }
 
-set_uci_enabled_flag() {
-	local value="$1"
+persist_control_mode() {
+	local mode="$1"
 
-	uci -q get fancontrol.main >/dev/null 2>&1 || return 1
-	uci -q set "fancontrol.main.enabled=$value" >/dev/null 2>&1 || return 1
+	case "$mode" in
+		fancontrol|kernel)
+		;;
+		*)
+			return 1
+		;;
+	esac
+
+	uci -q set fancontrol.main=fancontrol >/dev/null 2>&1 || return 1
+	uci -q set fancontrol.main.control_mode="$mode" >/dev/null 2>&1 || return 1
 	uci -q commit fancontrol >/dev/null 2>&1 || return 1
 	return 0
 }
@@ -278,8 +303,8 @@ rollback_to_kernel_mode() {
 	if [ -n "$thermal_mode_path" ] && [ -w "$thermal_mode_path" ]; then
 		echo "enabled" > "$thermal_mode_path" >/dev/null 2>&1
 	fi
+	persist_control_mode "kernel" >/dev/null 2>&1 || true
 	/etc/init.d/fancontrol enable >/dev/null 2>&1 || true
-	set_uci_enabled_flag 1 >/dev/null 2>&1 || true
 	if ! service_is_running "$pidfile"; then
 		/etc/init.d/fancontrol start >/dev/null 2>&1 || true
 		wait_service_running 8 "$pidfile" >/dev/null 2>&1 || true
@@ -287,7 +312,7 @@ rollback_to_kernel_mode() {
 }
 
 detect_control_mode() {
-	local thermal_mode="$2"
+	local thermal_mode="$1"
 
 	case "$thermal_mode" in
 		disabled)
@@ -318,7 +343,7 @@ get_control_mode() {
 	if [ -n "$thermal_mode_path" ]; then
 		thermal_mode="$(read_text_value "$thermal_mode_path" 2>/dev/null)"
 	fi
-	mode="$(detect_control_mode "$running" "$thermal_mode")"
+	mode="$(detect_control_mode "$thermal_mode")"
 
 	json_init
 	json_add_boolean ok 1
@@ -367,16 +392,7 @@ set_control_mode() {
 				return
 			}
 
-			/etc/init.d/fancontrol enable >/dev/null 2>&1 || {
-				rollback_to_kernel_mode "$thermal_mode_path" "$pidfile"
-				json_error "failed to enable fancontrol service; rolled back to kernel mode"
-				return
-			}
-			set_uci_enabled_flag 1 || {
-				rollback_to_kernel_mode "$thermal_mode_path" "$pidfile"
-				json_error "failed to persist fancontrol enabled state; rolled back to kernel mode"
-				return
-			}
+			/etc/init.d/fancontrol enable >/dev/null 2>&1 || true
 			if ! service_is_running "$pidfile"; then
 				/etc/init.d/fancontrol start >/dev/null 2>&1 || {
 					rollback_to_kernel_mode "$thermal_mode_path" "$pidfile"
@@ -397,42 +413,49 @@ set_control_mode() {
 				json_error "failed to set thermal mode disabled; rolled back to kernel mode"
 				return
 			}
+			wait_thermal_mode "$thermal_mode_path" "$target_thermal_mode" 5 || {
+				rollback_to_kernel_mode "$thermal_mode_path" "$pidfile"
+				json_error "thermal mode did not switch to disabled; rolled back to kernel mode"
+				return
+			}
 		;;
 		kernel)
-			/etc/init.d/fancontrol enable >/dev/null 2>&1 || {
-				json_error "failed to enable fancontrol service in kernel mode"
-				return
-			}
-			set_uci_enabled_flag 1 || {
-				json_error "failed to persist fancontrol enabled state in kernel mode"
-				return
-			}
-			if ! service_is_running "$pidfile"; then
-				/etc/init.d/fancontrol start >/dev/null 2>&1 || {
-					json_error "failed to start fancontrol service in kernel mode"
-					return
-				}
-				wait_service_running 8 "$pidfile" || {
-					local reason
-					reason="$(diagnose_fancontrol_start_failure "$config_file" "$thermal_mode_path")"
-					json_error "fancontrol is not running in kernel mode ($reason)"
-					return
-				}
-			fi
 			target_thermal_mode="enabled"
 			echo "$target_thermal_mode" > "$thermal_mode_path" 2>/dev/null || {
 				json_error "failed to set thermal mode enabled"
 				return
 			}
+			wait_thermal_mode "$thermal_mode_path" "$target_thermal_mode" 5 || {
+				json_error "thermal mode did not switch to enabled"
+				return
+			}
+			/etc/init.d/fancontrol enable >/dev/null 2>&1 || true
+			if ! service_is_running "$pidfile"; then
+				/etc/init.d/fancontrol start >/dev/null 2>&1 || {
+					json_error "thermal mode switched to enabled, but failed to start fancontrol service in kernel mode"
+					return
+				}
+				wait_service_running 8 "$pidfile" || {
+					local reason
+					reason="$(diagnose_fancontrol_start_failure "$config_file" "$thermal_mode_path")"
+					json_error "thermal mode switched to enabled, but fancontrol is not running in kernel mode ($reason)"
+					return
+				}
+			fi
 		;;
 	esac
+
+	if ! persist_control_mode "$mode"; then
+		json_error "control mode switched, but failed to persist to UCI"
+		return
+	fi
 
 	service_is_running "$pidfile" && running=1
 	service_is_enabled && enabled=1
 	if [ -n "$thermal_mode_path" ]; then
 		thermal_mode="$(read_text_value "$thermal_mode_path" 2>/dev/null)"
 	fi
-	detected_mode="$(detect_control_mode "$running" "$thermal_mode")"
+	detected_mode="$(detect_control_mode "$thermal_mode")"
 
 	json_init
 	json_add_boolean ok 1
@@ -618,8 +641,7 @@ apply_board_config() {
 	shift 12
 	local policy="$1"
 	local failsafe="$2"
-	local pidfile="$3"
-	local entries="$4"
+	local entries="$3"
 
 	local enabled sid type source_path object method skey args t_start t_full t_crit ttl poll weight
 	local pwm_inverted_raw
@@ -650,7 +672,7 @@ apply_board_config() {
 	pwm_path="$(sanitize_field "$pwm_path")"
 	pwm_enable_path="$(sanitize_field "$pwm_enable_path")"
 	thermal_mode_path="$(sanitize_field "$thermal_mode_path")"
-	pwm_min="$(to_int "$pwm_min" 0)"
+	pwm_min="$(to_int "$pwm_min" "$MIN_PWM")"
 	pwm_max="$(to_int "$pwm_max" "$MAX_PWM")"
 	pwm_inverted_raw="$(sanitize_field "$pwm_inverted")"
 	if [ -z "$pwm_inverted_raw" ]; then
@@ -661,27 +683,26 @@ apply_board_config() {
 			return
 		}
 	fi
-	pwm_startup="$(to_int "$pwm_startup" 128)"
+	pwm_startup=128
 	ramp_up="$(to_int "$ramp_up" 25)"
 	ramp_down="$(to_int "$ramp_down" 8)"
 	hysteresis="$(to_int "$hysteresis" 2000)"
 	policy="$(echo "$(sanitize_field "$policy")" | tr 'A-Z' 'a-z')"
 	failsafe="$(to_int "$failsafe" 64)"
-	pidfile="$(sanitize_field "$pidfile")"
-	[ "$pwm_min" -ge 0 ] && [ "$pwm_min" -le "$MAX_PWM" ] || {
-		json_error "PWM_MIN must be in range [0, 255]"
+	[ "$pwm_min" -ge "$MIN_PWM" ] && [ "$pwm_min" -le "$MAX_PWM" ] || {
+		json_error "PWM_MIN must be in range [$MIN_PWM, $MAX_PWM]"
 		return
 	}
-	[ "$pwm_max" -ge 0 ] && [ "$pwm_max" -le "$MAX_PWM" ] || {
-		json_error "PWM_MAX must be in range [0, 255]"
+	[ "$pwm_max" -ge "$MIN_PWM" ] && [ "$pwm_max" -le "$MAX_PWM" ] || {
+		json_error "PWM_MAX must be in range [$MIN_PWM, $MAX_PWM]"
 		return
 	}
 	[ "$pwm_min" -le "$pwm_max" ] || {
 		json_error "PWM_MIN must be <= PWM_MAX"
 		return
 	}
-	[ "$failsafe" -ge 0 ] && [ "$failsafe" -le "$MAX_PWM" ] || {
-		json_error "FAILSAFE_PWM must be in range [0, 255]"
+	[ "$failsafe" -ge "$MIN_PWM" ] && [ "$failsafe" -le "$MAX_PWM" ] || {
+		json_error "FAILSAFE_PWM must be in range [$MIN_PWM, $MAX_PWM]"
 		return
 	}
 	[ "$ramp_up" -ge 1 ] || {
@@ -699,11 +720,6 @@ apply_board_config() {
 	[ -z "$policy" ] && policy="max"
 	[ "$policy" = "max" ] || {
 		json_error "unsupported POLICY: $policy (only 'max' is supported)"
-		return
-	}
-	[ -z "$pidfile" ] && pidfile="/var/run/fancontrol.pid"
-	[ "$pwm_startup" -ge -1 ] && [ "$pwm_startup" -le "$MAX_PWM" ] || {
-		json_error "PWM_STARTUP_PWM must be -1 or in range [0, 255]"
 		return
 	}
 
@@ -835,7 +851,6 @@ EOF2
 		echo "HYSTERESIS_MC=$hysteresis"
 		echo "POLICY=$policy"
 		echo "FAILSAFE_PWM=$failsafe"
-		echo "PIDFILE=$pidfile"
 		printf "%s\n" "$source_lines"
 	} > "$tmp" || {
 		rm -f "$tmp"
@@ -858,16 +873,28 @@ EOF2
 		return
 	fi
 
+	uci -q set fancontrol.main=fancontrol >/dev/null 2>&1 || {
+		json_error "failed to persist UCI section fancontrol.main"
+		return
+	}
+	uci -q set fancontrol.main.config_file="$output" >/dev/null 2>&1 || {
+		json_error "failed to persist config_file to UCI"
+		return
+	}
+	uci -q commit fancontrol >/dev/null 2>&1 || {
+		json_error "failed to commit UCI fancontrol config"
+		return
+	}
+
 	json_ok "$output"
 }
 
 runtime_status() {
-	local req_path="$1"
 	local status_file="$RUNTIME_STATUS_FILE_DEFAULT"
 	local config_file pidfile running=0
 	local payload
 
-	config_file="$(resolve_config_file "$req_path")"
+	config_file="$(resolve_active_config_file)"
 	pidfile="$(resolve_pidfile_path "$config_file")"
 	service_is_running "$pidfile" && running=1
 
@@ -974,7 +1001,6 @@ case "$1" in
 			json_add_string hysteresis_mC "string"
 			json_add_string policy "string"
 			json_add_string failsafe_pwm "string"
-			json_add_string pidfile "string"
 			json_add_string entries "string"
 		json_close_object
 		json_add_object runtimeStatus
@@ -1026,10 +1052,9 @@ case "$1" in
 				json_get_var hysteresis_mC hysteresis_mC
 				json_get_var policy policy
 				json_get_var failsafe_pwm failsafe_pwm
-				json_get_var pidfile pidfile
 				json_get_var entries entries
 				json_cleanup
-				apply_board_config "$output" "$interval" "$pwm_path" "$pwm_enable_path" "$thermal_mode_path" "$pwm_min" "$pwm_max" "$pwm_inverted" "$pwm_startup_pwm" "$ramp_up" "$ramp_down" "$hysteresis_mC" "$policy" "$failsafe_pwm" "$pidfile" "$entries"
+				apply_board_config "$output" "$interval" "$pwm_path" "$pwm_enable_path" "$thermal_mode_path" "$pwm_min" "$pwm_max" "$pwm_inverted" "$pwm_startup_pwm" "$ramp_up" "$ramp_down" "$hysteresis_mC" "$policy" "$failsafe_pwm" "$entries"
 			;;
 			runtimeStatus)
 				read -r input

@@ -14,7 +14,6 @@ RAMP_DOWN=8
 HYSTERESIS_MC=2000
 POLICY=max
 FAILSAFE_PWM=64
-PIDFILE=/var/run/fancontrol.pid
 
 # SoC temperature (milli-Celsius)
 SOURCE_soc=type=sysfs,path=/sys/class/thermal/thermal_zone0/temp,t_start=60000,t_full=82000,t_crit=90000,ttl=6,poll=1,weight=100

@@ -6,8 +6,7 @@ const DEFAULTS = {
 	PWM_PATH: '/sys/class/hwmon/hwmon2/pwm1',
 	PWM_ENABLE_PATH: '/sys/class/hwmon/hwmon2/pwm1_enable',
 	NVME_TEMP_PATH: '/sys/class/nvme/nvme0/hwmon1/temp1_input',
-	THERMAL_MODE_PATH: '/sys/class/thermal/thermal_zone0/mode',
-	PIDFILE: '/var/run/fancontrol.pid'
+	THERMAL_MODE_PATH: '/sys/class/thermal/thermal_zone0/mode'
 };
 
 function intInRange(value, fallback, minv, maxv) {

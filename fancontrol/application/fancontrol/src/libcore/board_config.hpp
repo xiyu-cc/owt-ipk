@@ -5,6 +5,8 @@
 
 namespace fancontrol::core {
 
+inline constexpr const char *kFixedPidfilePath = "/var/run/fancontrol.pid";
+
 struct BoardSourceConfig {
     std::string id;
     std::string type;
@@ -39,8 +41,6 @@ struct BoardConfig {
     int hysteresis_mC = 2000;
     std::string policy = "max";
     int failsafe_pwm = 64;
-
-    std::string pidfile = "/var/run/fancontrol.pid";
 
     std::vector<BoardSourceConfig> sources;
 };

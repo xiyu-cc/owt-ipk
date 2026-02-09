@@ -45,14 +45,15 @@ const spec = {
 
 	formatModeStatus: function(info) {
 		const mode = validators.safeField(info && info.mode ? info.mode : 'kernel').toLowerCase();
-		const modeLabel = mode === 'fancontrol' ? '用户态 fancontrol' : '内核自动';
-		const running = info && info.running ? '是' : '否';
-		const enabled = info && info.enabled ? '是' : '否';
-		const thermalModePath = validators.safeField(info && info.thermal_mode_path ? info.thermal_mode_path : '-');
-		const thermalMode = validators.safeField(info && info.thermal_mode ? info.thermal_mode : '-');
+		const running = !!(info && info.running);
+		let text = mode === 'fancontrol'
+			? _('启用（fancontrol 接管）')
+			: _('未启用（内核接管）');
 
-		return _('模式: %s | 服务运行: %s | 开机自启: %s | thermal 模式: %s (%s)')
-			.format(modeLabel, running, enabled, thermalMode, thermalModePath);
+		if (!running)
+			text += _(' | 服务异常：未运行');
+
+		return text;
 	},
 
 	applyControlModeInfo: function(info, refs) {
@@ -192,14 +193,13 @@ const spec = {
 		const cfgMax = validators.intInRange(cfg.pwm_max, 255, 0, 255);
 		const cfgInverted = !!cfg.pwm_inverted;
 		const logicalMin = cfgInverted ? cfgMax : cfgMin;
-		const logicalMax = cfgInverted ? cfgMin : cfgMax;
-		refs.pwmMinInput.value = String(validators.intInRange(logicalMin, 128, 0, 255));
-		refs.pwmMaxInput.value = String(validators.intInRange(logicalMax, 0, 0, 255));
-		refs.rampUpInput.value = String(validators.intInRange(cfg.ramp_up, 25, 1, 255));
-		refs.rampDownInput.value = String(validators.intInRange(cfg.ramp_down, 8, 1, 255));
-		refs.hystInput.value = String(validators.intInRange(cfg.hysteresis_mC, 2000, 0, 100000));
-		refs.failsafeInput.value = String(validators.intInRange(cfg.failsafe_pwm, 64, 0, 255));
-		refs.pidfileInput.value = validators.safeField(cfg.pidfile || validators.DEFAULTS.PIDFILE);
+			const logicalMax = cfgInverted ? cfgMin : cfgMax;
+			refs.pwmMinInput.value = String(validators.intInRange(logicalMin, 128, 0, 255));
+			refs.pwmMaxInput.value = String(validators.intInRange(logicalMax, 0, 0, 255));
+			refs.rampUpInput.value = String(validators.intInRange(cfg.ramp_up, 25, 1, 255));
+			refs.rampDownInput.value = String(validators.intInRange(cfg.ramp_down, 8, 1, 255));
+			refs.hystInput.value = String(validators.intInRange(cfg.hysteresis_mC, 2000, 0, 100000));
+			refs.failsafeInput.value = String(validators.intInRange(cfg.failsafe_pwm, 64, 0, 255));
 
 		const src = Array.isArray(cfg.sources) ? cfg.sources : [];
 		this._sourceTable.fillRows(src, refs.tbody);
@@ -216,14 +216,13 @@ const spec = {
 		refs.intervalInput.value = '1';
 		refs.pwmPathInput.value = pwmDefaults.pwmPath;
 		refs.pwmEnableInput.value = pwmDefaults.pwmEnablePath;
-		refs.thermalModePathInput.value = validators.DEFAULTS.THERMAL_MODE_PATH;
-		refs.pwmMinInput.value = '128';
-		refs.pwmMaxInput.value = '0';
-		refs.rampUpInput.value = '25';
-		refs.rampDownInput.value = '8';
-		refs.hystInput.value = '2000';
-		refs.failsafeInput.value = '64';
-		refs.pidfileInput.value = validators.DEFAULTS.PIDFILE;
+			refs.thermalModePathInput.value = validators.DEFAULTS.THERMAL_MODE_PATH;
+			refs.pwmMinInput.value = '128';
+			refs.pwmMaxInput.value = '0';
+			refs.rampUpInput.value = '25';
+			refs.rampDownInput.value = '8';
+			refs.hystInput.value = '2000';
+			refs.failsafeInput.value = '64';
 
 		this._sourceTable.fillRows(validators.defaultSources(channels, hasQmodem), refs.tbody);
 		refs.submitControls = refs.baseSubmitControls.concat(this._sourceTable.getAllButtons());
@@ -285,19 +284,18 @@ const spec = {
 			const output = (refs.outputInput.value || validators.DEFAULTS.CONFIG_PATH).trim() || validators.DEFAULTS.CONFIG_PATH;
 			const pwmPath = validators.safeField(refs.pwmPathInput.value);
 			const pwmEnablePath = validators.safeField(refs.pwmEnableInput.value);
-			const thermalModePath = validators.safeField(refs.thermalModePathInput.value || validators.DEFAULTS.THERMAL_MODE_PATH);
-			const pwmLogicalMin = validators.intInRange(refs.pwmMinInput.value, 128, 0, 255);
-			const pwmLogicalMax = validators.intInRange(refs.pwmMaxInput.value, 0, 0, 255);
-			const pwmInverted = (pwmLogicalMin > pwmLogicalMax) ? 1 : 0;
-			const pwmMin = Math.min(pwmLogicalMin, pwmLogicalMax);
-			const pwmMax = Math.max(pwmLogicalMin, pwmLogicalMax);
-			const pwmStartup = -1;
-			const rampUp = validators.intInRange(refs.rampUpInput.value, 25, 1, 255);
-			const rampDown = validators.intInRange(refs.rampDownInput.value, 8, 1, 255);
-			const hysteresis = validators.intInRange(refs.hystInput.value, 2000, 0, 100000);
-			const policy = 'max';
-			const failsafe = validators.intInRange(refs.failsafeInput.value, 64, 0, 255);
-			const pidfile = validators.safeField(refs.pidfileInput.value || validators.DEFAULTS.PIDFILE) || validators.DEFAULTS.PIDFILE;
+				const thermalModePath = validators.safeField(refs.thermalModePathInput.value || validators.DEFAULTS.THERMAL_MODE_PATH);
+				const pwmLogicalMin = validators.intInRange(refs.pwmMinInput.value, 128, 0, 255);
+				const pwmLogicalMax = validators.intInRange(refs.pwmMaxInput.value, 0, 0, 255);
+				const pwmInverted = (pwmLogicalMin > pwmLogicalMax) ? 1 : 0;
+				const pwmMin = Math.min(pwmLogicalMin, pwmLogicalMax);
+				const pwmMax = Math.max(pwmLogicalMin, pwmLogicalMax);
+				const pwmStartup = 128;
+				const rampUp = validators.intInRange(refs.rampUpInput.value, 25, 1, 255);
+				const rampDown = validators.intInRange(refs.rampDownInput.value, 8, 1, 255);
+				const hysteresis = validators.intInRange(refs.hystInput.value, 2000, 0, 100000);
+				const policy = 'max';
+				const failsafe = validators.intInRange(refs.failsafeInput.value, 64, 0, 255);
 
 			if (!pwmPath) {
 				ui.addNotification(null, E('p', _('PWM 路径不能为空。')), 'danger');
@@ -326,16 +324,15 @@ const spec = {
 				thermal_mode_path: thermalModePath,
 				pwm_min: String(pwmMin),
 				pwm_max: String(pwmMax),
-				pwm_inverted: String(pwmInverted),
-				pwm_startup_pwm: String(pwmStartup),
-				ramp_up: String(rampUp),
-				ramp_down: String(rampDown),
-				hysteresis_mC: String(hysteresis),
-				policy: policy,
-				failsafe_pwm: String(failsafe),
-				pidfile: pidfile,
-				entries: pack.lines.join('\n')
-			});
+					pwm_inverted: String(pwmInverted),
+					pwm_startup_pwm: String(pwmStartup),
+					ramp_up: String(rampUp),
+					ramp_down: String(rampDown),
+					hysteresis_mC: String(hysteresis),
+					policy: policy,
+					failsafe_pwm: String(failsafe),
+					entries: pack.lines.join('\n')
+				});
 
 			if (!result || !result.ok) {
 				ui.addNotification(null, E('p', _('生成配置失败: %s').format(result ? (result.error || '未知错误') : 'RPC 调用失败')), 'danger');
@@ -373,15 +370,14 @@ const spec = {
 		const outputInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': validators.DEFAULTS.CONFIG_PATH, 'style': 'min-width:24em' });
 		const pwmPathInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': pwmDefaults.pwmPath, 'style': 'min-width:24em' });
 		const pwmEnableInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': pwmDefaults.pwmEnablePath, 'style': 'min-width:24em' });
-		const thermalModePathInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': validators.DEFAULTS.THERMAL_MODE_PATH, 'style': 'min-width:24em' });
-		const pwmMinInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '128', 'min': '0', 'max': '255', 'style': 'width:8em' });
-		const pwmMaxInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '0', 'min': '0', 'max': '255', 'style': 'width:8em' });
-		const rampUpInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '25', 'min': '1', 'max': '255', 'style': 'width:8em' });
-		const rampDownInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '8', 'min': '1', 'max': '255', 'style': 'width:8em' });
-		const hystInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '2000', 'min': '0', 'max': '100000', 'style': 'width:8em' });
-		const failsafeInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '64', 'min': '0', 'max': '255', 'style': 'width:8em' });
-		const pidfileInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': validators.DEFAULTS.PIDFILE, 'style': 'min-width:16em' });
-		const fancontrolToggleInput = E('input', { 'type': 'checkbox' });
+			const thermalModePathInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': validators.DEFAULTS.THERMAL_MODE_PATH, 'style': 'min-width:24em' });
+			const pwmMinInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '128', 'min': '0', 'max': '255', 'style': 'width:8em' });
+			const pwmMaxInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '0', 'min': '0', 'max': '255', 'style': 'width:8em' });
+			const rampUpInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '25', 'min': '1', 'max': '255', 'style': 'width:8em' });
+			const rampDownInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '8', 'min': '1', 'max': '255', 'style': 'width:8em' });
+			const hystInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '2000', 'min': '0', 'max': '100000', 'style': 'width:8em' });
+			const failsafeInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '64', 'min': '0', 'max': '255', 'style': 'width:8em' });
+			const fancontrolToggleInput = E('input', { 'type': 'checkbox' });
 		const modeStatus = E('div', { 'class': 'cbi-value-description', 'style': 'margin-top:0.4em' }, '');
 		const runtimeStatus = E('pre', {
 			'class': 'cbi-value-description',
@@ -432,22 +428,21 @@ const spec = {
 		const refs = {
 			intervalInput,
 			outputInput,
-			pwmPathInput,
-			pwmEnableInput,
-			thermalModePathInput,
-			pwmMinInput,
-			pwmMaxInput,
-			rampUpInput,
-			rampDownInput,
-			hystInput,
-			failsafeInput,
-			pidfileInput,
-			fancontrolToggleInput,
-			modeStatus,
-			runtimeStatus,
-			submitStatus,
-			tbody
-		};
+				pwmPathInput,
+				pwmEnableInput,
+				thermalModePathInput,
+				pwmMinInput,
+				pwmMaxInput,
+				rampUpInput,
+				rampDownInput,
+				hystInput,
+				failsafeInput,
+				fancontrolToggleInput,
+				modeStatus,
+				runtimeStatus,
+				submitStatus,
+				tbody
+			};
 
 		refs.baseSubmitControls = [
 			fancontrolToggleInput,
@@ -552,15 +547,14 @@ const spec = {
 				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('输出文件')), outputInput ]),
 				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('控制周期 (秒)')), intervalInput ]),
 				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('PWM 路径')), pwmPathInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('PWM 使能路径')), pwmEnableInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('Thermal 模式路径')), thermalModePathInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('最小 PWM (最低转速)')), pwmMinInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('最大 PWM (最高转速)')), pwmMaxInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('升速/降速步进')), rampUpInput, E('span', { 'style': 'padding:0 0.6em' }, '/'), rampDownInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('滞回 (mC)')), hystInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('失效保护 PWM')), failsafeInput ]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('PID 文件')), pidfileInput ]),
-				E('div', { 'style': 'margin-bottom:0.9em' }, [
+					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('PWM 使能路径')), pwmEnableInput ]),
+					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('Thermal 模式路径')), thermalModePathInput ]),
+					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('最小 PWM (最低转速)')), pwmMinInput ]),
+					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('最大 PWM (最高转速)')), pwmMaxInput ]),
+					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('升速/降速步进')), rampUpInput, E('span', { 'style': 'padding:0 0.6em' }, '/'), rampDownInput ]),
+					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('滞回 (mC)')), hystInput ]),
+					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('失效保护 PWM')), failsafeInput ]),
+					E('div', { 'style': 'margin-bottom:0.9em' }, [
 					E('label', { 'style': 'display:inline-block; min-width:14em' }, _('当前模式状态')),
 					modeStatus
 				]),

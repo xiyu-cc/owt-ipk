@@ -318,23 +318,44 @@ get_voltage()
 #return raw data
 get_temperature()
 {   
-    #Temperature（温度）
+    # Temperature（温度）
+    # Parse +QTEMP:"sensor","value" lines.
+    # Prefer case sensor (sdx-case-therm-usr); fallback to max valid sensor value.
     at_command="AT+QTEMP"
-    local temp
-    local line=1
-    QTEMP=$(at ${at_port} ${at_command} | grep "+QTEMP:")
-    for line in $( echo -e "$QTEMP" ); do
-        templine=$(echo $line | grep -o "[0-9]\{1,3\}")
-        for tmp in $(echo $templine); do
-            [ "$tmp" -gt 10 ] && [ "$tmp" -lt 110 ] && temp=$tmp
-            if [ -n "$temp" ]; then
-                break
-            fi
-        done
-    done
-	if [ -n "$temp" ]; then
-		temp="${temp}$(printf "\xc2\xb0")C"
-	fi
+    local raw selected temp
+
+    raw="$(at "${at_port}" "${at_command}" 2>/dev/null)"
+    selected="$(printf '%s\n' "$raw" | awk -F'"' '
+        BEGIN { have_case=0; have_max=0; }
+        /\+QTEMP:/ {
+            sensor=$2
+            value=$4
+            gsub(/\r/, "", sensor)
+            gsub(/\r/, "", value)
+            gsub(/[[:space:]]/, "", value)
+            if (value !~ /^-?[0-9]+([.][0-9]+)?$/) next
+            temp=value + 0
+            # Filter obvious sentinel/out-of-range values (e.g. -273)
+            if (temp <= -100 || temp >= 200) next
+            if (sensor == "sdx-case-therm-usr") {
+                case_temp=value
+                have_case=1
+            }
+            if (!have_max || temp > (max_temp + 0)) {
+                max_temp=value
+                have_max=1
+            }
+        }
+        END {
+            if (have_case) print case_temp
+            else if (have_max) print max_temp
+        }
+    ')"
+
+    temp="$(printf '%s' "$selected" | tr -d '\r')"
+    if [ -n "$temp" ]; then
+        temp="${temp}$(printf "\xc2\xb0")C"
+    fi
     add_plain_info_entry "temperature" "$temp" "Temperature"
 }
 
