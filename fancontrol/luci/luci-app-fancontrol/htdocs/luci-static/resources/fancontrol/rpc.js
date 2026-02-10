@@ -1,6 +1,5 @@
 'use strict';
 'require rpc';
-'require fancontrol.validators as validators';
 
 const callScan = rpc.declare({
 	object: 'luci.fancontrol',
@@ -9,24 +8,22 @@ const callScan = rpc.declare({
 
 const callLoadBoardConfig = rpc.declare({
 	object: 'luci.fancontrol',
-	method: 'loadBoardConfig',
-	params: [ 'path' ]
+	method: 'loadBoardConfig'
+});
+
+const callLoadBoardDefaults = rpc.declare({
+	object: 'luci.fancontrol',
+	method: 'loadBoardDefaults'
 });
 
 const callApplyBoardConfig = rpc.declare({
 	object: 'luci.fancontrol',
 	method: 'applyBoardConfig',
 	params: [
-		'output', 'interval', 'pwm_path', 'pwm_enable_path', 'thermal_mode_path',
-		'pwm_min', 'pwm_max', 'pwm_inverted', 'pwm_startup_pwm', 'ramp_up', 'ramp_down',
+		'interval', 'control_mode', 'pwm_path', 'pwm_enable_path', 'thermal_mode_path',
+		'pwm_min', 'pwm_max', 'pwm_inverted', 'ramp_up', 'ramp_down',
 		'hysteresis_mC', 'policy', 'failsafe_pwm', 'entries'
 	]
-});
-
-const callGetControlMode = rpc.declare({
-	object: 'luci.fancontrol',
-	method: 'getControlMode',
-	params: [ 'path' ]
 });
 
 const callServiceAction = rpc.declare({
@@ -35,16 +32,10 @@ const callServiceAction = rpc.declare({
 	params: [ 'action' ]
 });
 
-const callSetControlMode = rpc.declare({
-	object: 'luci.fancontrol',
-	method: 'setControlMode',
-	params: [ 'mode', 'path' ]
-});
 
 const callRuntimeStatus = rpc.declare({
 	object: 'luci.fancontrol',
-	method: 'runtimeStatus',
-	params: [ 'path' ]
+	method: 'runtimeStatus'
 });
 
 function probeQmodem() {
@@ -57,13 +48,13 @@ function mapSettledLoad(results) {
 	const data = {
 		scan: {},
 		loadedBoard: {},
-		controlState: {},
+		boardDefaults: {},
 		runtimeState: {},
 		hasQmodem: false,
 		failures: []
 	};
 
-	const fields = [ 'scan', 'loadedBoard', 'controlState', 'runtimeState', 'hasQmodem' ];
+	const fields = [ 'scan', 'loadedBoard', 'boardDefaults', 'runtimeState', 'hasQmodem' ];
 	for (let i = 0; i < fields.length; i++) {
 		const key = fields[i];
 		const item = results[i];
@@ -79,13 +70,12 @@ function mapSettledLoad(results) {
 	return data;
 }
 
-function loadInitial(path) {
-	const requestPath = validators.safeField(path || validators.DEFAULTS.CONFIG_PATH) || validators.DEFAULTS.CONFIG_PATH;
+function loadInitial() {
 	return Promise.allSettled([
 		callScan(),
-		callLoadBoardConfig(requestPath),
-		callGetControlMode(requestPath),
-		callRuntimeStatus(requestPath),
+		callLoadBoardConfig(),
+		callLoadBoardDefaults(),
+		callRuntimeStatus(),
 		probeQmodem()
 	]).then(mapSettledLoad);
 }
@@ -93,15 +83,14 @@ function loadInitial(path) {
 function applyBoardConfig(payload) {
 	const p = payload || {};
 	return callApplyBoardConfig(
-		p.output,
 		p.interval,
+		p.control_mode,
 		p.pwm_path,
 		p.pwm_enable_path,
 		p.thermal_mode_path,
 		p.pwm_min,
 		p.pwm_max,
 		p.pwm_inverted,
-		p.pwm_startup_pwm,
 		p.ramp_up,
 		p.ramp_down,
 		p.hysteresis_mC,
@@ -115,8 +104,7 @@ return L.Class.extend({
 	mapSettledLoad: mapSettledLoad,
 	loadInitial: loadInitial,
 	loadBoardConfig: callLoadBoardConfig,
-	getControlMode: callGetControlMode,
-	setControlMode: callSetControlMode,
+	loadBoardDefaults: callLoadBoardDefaults,
 	runtimeStatus: callRuntimeStatus,
 	serviceAction: callServiceAction,
 	applyBoardConfig: applyBoardConfig

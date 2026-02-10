@@ -5,6 +5,5 @@
 namespace fancontrol::core {
 
 int apply_ramp(int current_pwm, int target_pwm, const BoardConfig &cfg);
-int apply_startup_boost(const BoardConfig &cfg, int target_pwm, int current_pwm);
 
 } // namespace fancontrol::core

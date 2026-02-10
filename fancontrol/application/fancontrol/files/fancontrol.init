@@ -6,71 +6,28 @@ USE_PROCD=1
 
 PROG="/usr/sbin/fancontrol"
 PIDFILE="/var/run/fancontrol.pid"
-THERMAL_MODE_DEFAULT="/sys/class/thermal/thermal_zone0/mode"
+CONFIG_FILE="/etc/fancontrol.conf"
 
 . /lib/functions.sh
 
-resolve_thermal_mode_path() {
-	local config_file="$1"
-	local mode_path=""
-
-	if [ -r "$config_file" ]; then
-		mode_path="$(awk -F= '
-			/^[[:space:]]*THERMAL_MODE_PATH[[:space:]]*=/ {
-				val=$2
-				gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
-				print val
-				exit
-			}
-		' "$config_file" 2>/dev/null)"
-	fi
-
-	[ -n "$mode_path" ] || mode_path="$THERMAL_MODE_DEFAULT"
-	echo "$mode_path"
-}
-
-apply_control_mode() {
-	local control_mode="$1"
-	local config_file="$2"
-	local thermal_mode_path target_mode
-
-	thermal_mode_path="$(resolve_thermal_mode_path "$config_file")"
-	case "$control_mode" in
-		fancontrol|1|true|yes|on)
-			target_mode="disabled"
-		;;
-		*)
-			target_mode="enabled"
-		;;
-	esac
-
-	if [ -n "$thermal_mode_path" ] && [ -w "$thermal_mode_path" ]; then
-		echo "$target_mode" > "$thermal_mode_path" >/dev/null 2>&1 || true
-	fi
-}
-
 start_service() {
-	local config_file debug control_mode
+	local debug
 	local respawn_threshold respawn_timeout respawn_retry
 
 	config_load fancontrol
 
-	config_get config_file main config_file "/etc/fancontrol.r3mini"
-	config_get control_mode main control_mode "kernel"
 	config_get_bool debug main debug 0
 	config_get respawn_threshold main respawn_threshold 3600
 	config_get respawn_timeout main respawn_timeout 5
 	config_get respawn_retry main respawn_retry 5
 
-	if [ ! -r "$config_file" ]; then
-		echo "fancontrol: missing $config_file, generate board config first"
+	if [ ! -r "$CONFIG_FILE" ]; then
+		echo "fancontrol: missing $CONFIG_FILE, generate board config first"
 		return 1
 	fi
 
-	apply_control_mode "$control_mode" "$config_file"
-
 	procd_open_instance
-	procd_set_param command "$PROG" "$config_file"
+	procd_set_param command "$PROG" "$CONFIG_FILE"
 	procd_set_param pidfile "$PIDFILE"
 	procd_set_param respawn "$respawn_threshold" "$respawn_timeout" "$respawn_retry"
 	procd_set_param stdout 1

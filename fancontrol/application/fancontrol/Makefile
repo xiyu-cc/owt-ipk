@@ -45,7 +45,7 @@ define Package/fancontrol/install
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/fancontrol.config $(1)/etc/config/fancontrol
 	$(INSTALL_DIR) $(1)/etc
-	$(INSTALL_DATA) ./files/fancontrol.r3mini $(1)/etc/fancontrol.r3mini
+	$(INSTALL_DATA) ./files/fancontrol.conf $(1)/etc/fancontrol.conf
 	$(INSTALL_DIR) $(1)/usr/share/doc/fancontrol
 	$(INSTALL_DATA) ./files/README.openwrt $(1)/usr/share/doc/fancontrol/README.openwrt
 endef
@@ -57,9 +57,6 @@ define Package/fancontrol/postinst
 if ! uci -q get fancontrol.main >/dev/null 2>&1; then
 	uci -q batch <<'EOF'
 set fancontrol.main=fancontrol
-set fancontrol.main.enabled='1'
-set fancontrol.main.config_file='/etc/fancontrol.r3mini'
-set fancontrol.main.control_mode='kernel'
 set fancontrol.main.debug='0'
 set fancontrol.main.respawn_threshold='3600'
 set fancontrol.main.respawn_timeout='5'
@@ -67,14 +64,6 @@ set fancontrol.main.respawn_retry='5'
 commit fancontrol
 EOF
 fi
-
-if [ -z "$$(uci -q get fancontrol.main.control_mode)" ]; then
-	uci -q set fancontrol.main.control_mode='kernel'
-	uci -q commit fancontrol
-fi
-
-enabled="$$(uci -q get fancontrol.main.enabled)"
-[ "$$enabled" = "1" ] || exit 0
 
 /etc/init.d/fancontrol enable >/dev/null 2>&1 || true
 /etc/init.d/fancontrol start >/dev/null 2>&1 || true

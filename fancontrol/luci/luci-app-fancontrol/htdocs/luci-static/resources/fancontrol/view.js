@@ -6,7 +6,7 @@
 
 const spec = {
 	load: function() {
-		return fanRpc.loadInitial(validators.DEFAULTS.CONFIG_PATH);
+		return fanRpc.loadInitial();
 	},
 
 	bindButtonClick: function(btn, fn) {
@@ -41,50 +41,6 @@ const spec = {
 			.finally(() => {
 				this.setSubmitBusy(refs, false);
 			});
-	},
-
-	formatModeStatus: function(info) {
-		const mode = validators.safeField(info && info.mode ? info.mode : 'kernel').toLowerCase();
-		const running = !!(info && info.running);
-		let text = mode === 'fancontrol'
-			? _('启用（fancontrol 接管）')
-			: _('未启用（内核接管）');
-
-		if (!running)
-			text += _(' | 服务异常：未运行');
-
-		return text;
-	},
-
-	applyControlModeInfo: function(info, refs) {
-		if (!refs)
-			return;
-
-		const mode = validators.safeField(info && info.mode ? info.mode : 'kernel').toLowerCase();
-		if (refs.fancontrolToggleInput)
-			refs.fancontrolToggleInput.checked = (mode === 'fancontrol');
-		if (refs.modeStatus)
-			refs.modeStatus.textContent = this.formatModeStatus(info || {});
-	},
-
-	refreshControlMode: async function(refs, notifyResult) {
-		try {
-			const path = (refs.outputInput.value || validators.DEFAULTS.CONFIG_PATH).trim() || validators.DEFAULTS.CONFIG_PATH;
-			const state = await fanRpc.getControlMode(path);
-
-			if (!state || !state.ok) {
-				if (notifyResult)
-					ui.addNotification(null, E('p', _('查询控制模式失败。')), 'danger');
-				return;
-			}
-
-			this.applyControlModeInfo(state, refs);
-			if (notifyResult)
-				ui.addNotification(null, E('p', _('当前控制模式: %s').format(validators.safeField(state.mode || 'kernel'))), 'info');
-		} catch (e) {
-			if (notifyResult)
-				ui.addNotification(null, E('p', _('查询控制模式失败。')), 'danger');
-		}
 	},
 
 	formatRuntimeStatus: function(status) {
@@ -138,10 +94,7 @@ const spec = {
 
 	refreshRuntimeStatus: async function(refs, notifyResult) {
 		try {
-			const path = (refs && refs.outputInput && refs.outputInput.value)
-				? ((refs.outputInput.value || validators.DEFAULTS.CONFIG_PATH).trim() || validators.DEFAULTS.CONFIG_PATH)
-				: validators.DEFAULTS.CONFIG_PATH;
-			const status = await fanRpc.runtimeStatus(path);
+			const status = await fanRpc.runtimeStatus();
 			if (!status || !status.ok) {
 				this.applyRuntimeStatus(status || {}, refs);
 				if (notifyResult)
@@ -179,20 +132,15 @@ const spec = {
 		if (!cfg || !cfg.ok)
 			return false;
 
-		if (!cfg.exists) {
-			if (notifyResult)
-				ui.addNotification(null, E('p', _('未读取到可用配置文件：%s').format(cfg.path || validators.DEFAULTS.CONFIG_PATH)), 'info');
-			return false;
-		}
-
 		refs.intervalInput.value = String(validators.intInRange(cfg.interval, 1, 1, 3600));
+		refs.modeSelect.value = (validators.safeField(cfg.control_mode).toLowerCase() === 'user') ? 'user' : 'kernel';
 		refs.pwmPathInput.value = validators.safeField(cfg.pwm_path || refs.pwmPathInput.value);
 		refs.pwmEnableInput.value = validators.safeField(cfg.pwm_enable_path || refs.pwmEnableInput.value);
 		refs.thermalModePathInput.value = validators.safeField(cfg.thermal_mode_path || refs.thermalModePathInput.value);
-		const cfgMin = validators.intInRange(cfg.pwm_min, 0, 0, 255);
-		const cfgMax = validators.intInRange(cfg.pwm_max, 255, 0, 255);
-		const cfgInverted = !!cfg.pwm_inverted;
-		const logicalMin = cfgInverted ? cfgMax : cfgMin;
+			const cfgMin = validators.intInRange(cfg.pwm_min, 0, 0, 255);
+			const cfgMax = validators.intInRange(cfg.pwm_max, 255, 0, 255);
+			const cfgInverted = !!cfg.pwm_inverted;
+			const logicalMin = cfgInverted ? cfgMax : cfgMin;
 			const logicalMax = cfgInverted ? cfgMin : cfgMax;
 			refs.pwmMinInput.value = String(validators.intInRange(logicalMin, 128, 0, 255));
 			refs.pwmMaxInput.value = String(validators.intInRange(logicalMax, 0, 0, 255));
@@ -204,18 +152,40 @@ const spec = {
 		const src = Array.isArray(cfg.sources) ? cfg.sources : [];
 		this._sourceTable.fillRows(src, refs.tbody);
 
-		if (notifyResult)
-			ui.addNotification(null, E('p', _('已从 %s 载入 %d 个温度源').format(cfg.path || validators.DEFAULTS.CONFIG_PATH, src.length)), 'info');
+		if (notifyResult) {
+			if (cfg.exists)
+				ui.addNotification(null, E('p', _('已从 %s 载入 %d 个温度源').format(cfg.path || validators.DEFAULTS.CONFIG_PATH, src.length)), 'info');
+			else
+				ui.addNotification(null, E('p', _('配置文件不存在，已载入后端默认配置（%d 个温度源）').format(src.length)), 'info');
+		}
 		return true;
 	},
 
 	resetToDefaults: function(refs, channels, hasQmodem) {
+		if (this._backendDefaults && this._backendDefaults.ok) {
+			const cfg = Object.assign({}, this._backendDefaults);
+			if (!hasQmodem && Array.isArray(cfg.sources)) {
+				cfg.sources = cfg.sources.map((s) => {
+					const out = Object.assign({}, s || {});
+					if (String(out.type || '').toLowerCase() === 'ubus' &&
+						String(out.object || '').toLowerCase() === 'qmodem')
+						out.enabled = false;
+					return out;
+				});
+			}
+			this.applyLoadedBoardConfig(cfg, refs, false);
+			refs.submitControls = refs.baseSubmitControls.concat(this._sourceTable.getAllButtons());
+			this.refreshRuntimeStatus(refs, false);
+			ui.addNotification(null, E('p', _('已恢复后端默认配置，请点击“应用”。')), 'info');
+			return;
+		}
+
 		const pwmDefaults = validators.defaultPwmPaths(channels);
 
-		refs.outputInput.value = validators.DEFAULTS.CONFIG_PATH;
-		refs.intervalInput.value = '1';
-		refs.pwmPathInput.value = pwmDefaults.pwmPath;
-		refs.pwmEnableInput.value = pwmDefaults.pwmEnablePath;
+			refs.intervalInput.value = '1';
+			refs.modeSelect.value = 'kernel';
+			refs.pwmPathInput.value = pwmDefaults.pwmPath;
+			refs.pwmEnableInput.value = pwmDefaults.pwmEnablePath;
 			refs.thermalModePathInput.value = validators.DEFAULTS.THERMAL_MODE_PATH;
 			refs.pwmMinInput.value = '128';
 			refs.pwmMaxInput.value = '0';
@@ -227,70 +197,38 @@ const spec = {
 		this._sourceTable.fillRows(validators.defaultSources(channels, hasQmodem), refs.tbody);
 		refs.submitControls = refs.baseSubmitControls.concat(this._sourceTable.getAllButtons());
 		this.refreshRuntimeStatus(refs, false);
-		ui.addNotification(null, E('p', _('已恢复默认配置，请点击“生成 /etc/fancontrol.r3mini”。')), 'info');
-	},
-
-	handleSwitchControlMode: async function(refs, forcedMode) {
-		try {
-			let mode = validators.safeField(forcedMode || '').toLowerCase();
-			if (mode !== 'fancontrol' && mode !== 'kernel')
-				mode = (refs && refs.fancontrolToggleInput && refs.fancontrolToggleInput.checked) ? 'fancontrol' : 'kernel';
-			const path = (refs.outputInput.value || validators.DEFAULTS.CONFIG_PATH).trim() || validators.DEFAULTS.CONFIG_PATH;
-			const result = await fanRpc.setControlMode(mode, path);
-
-			if (!result || !result.ok) {
-				await this.refreshControlMode(refs, false);
-				ui.addNotification(null, E('p', _('切换控制模式失败: %s').format(result ? (result.error || '未知错误') : 'RPC 调用失败')), 'danger');
-				return;
-			}
-
-			this.applyControlModeInfo(result, refs);
-			await this.refreshRuntimeStatus(refs, false);
-			ui.addNotification(null, E('p', _('控制模式已切换为 %s').format(validators.safeField(result.mode || mode))), 'info');
-		} catch (e) {
-			await this.refreshControlMode(refs, false);
-			ui.addNotification(null, E('p', _('切换控制模式失败: RPC 调用失败')), 'danger');
-		}
-	},
-
-	handleToggleFancontrol: async function(refs) {
-		const enabled = !!(refs && refs.fancontrolToggleInput && refs.fancontrolToggleInput.checked);
-		const mode = enabled ? 'fancontrol' : 'kernel';
-		return this.handleSwitchControlMode(refs, mode);
+		ui.addNotification(null, E('p', _('已恢复默认配置，请点击“应用”。')), 'info');
 	},
 
 	handleLoadExisting: async function(refs) {
-		try {
-			const path = (refs.outputInput.value || validators.DEFAULTS.CONFIG_PATH).trim() || validators.DEFAULTS.CONFIG_PATH;
-			const cfg = await fanRpc.loadBoardConfig(path);
+			try {
+				const cfg = await fanRpc.loadBoardConfig();
 
-			if (!cfg || !cfg.ok) {
-				ui.addNotification(null, E('p', _('读取配置失败: %s').format(cfg ? (cfg.error || '未知错误') : 'RPC 调用失败')), 'danger');
-				return;
-			}
+				if (!cfg || !cfg.ok) {
+					ui.addNotification(null, E('p', _('读取配置失败: %s').format(cfg ? (cfg.error || '未知错误') : 'RPC 调用失败')), 'danger');
+					return;
+				}
 
-			this.applyLoadedBoardConfig(cfg, refs, true);
-			refs.submitControls = refs.baseSubmitControls.concat(this._sourceTable.getAllButtons());
-			await this.refreshControlMode(refs, false);
-			await this.refreshRuntimeStatus(refs, false);
-		} catch (e) {
+				this.applyLoadedBoardConfig(cfg, refs, true);
+				refs.submitControls = refs.baseSubmitControls.concat(this._sourceTable.getAllButtons());
+				await this.refreshRuntimeStatus(refs, false);
+			} catch (e) {
 			ui.addNotification(null, E('p', _('读取配置失败: RPC 调用失败')), 'danger');
 		}
 	},
 
-	handleGenerate: async function(refs) {
+	handleApply: async function(refs) {
 		try {
-			const interval = validators.intInRange(refs.intervalInput.value, 1, 1, 3600);
-			const output = (refs.outputInput.value || validators.DEFAULTS.CONFIG_PATH).trim() || validators.DEFAULTS.CONFIG_PATH;
-			const pwmPath = validators.safeField(refs.pwmPathInput.value);
-			const pwmEnablePath = validators.safeField(refs.pwmEnableInput.value);
+				const interval = validators.intInRange(refs.intervalInput.value, 1, 1, 3600);
+				const controlMode = (refs && refs.modeSelect && refs.modeSelect.value === 'user') ? 'user' : 'kernel';
+				const pwmPath = validators.safeField(refs.pwmPathInput.value);
+				const pwmEnablePath = validators.safeField(refs.pwmEnableInput.value);
 				const thermalModePath = validators.safeField(refs.thermalModePathInput.value || validators.DEFAULTS.THERMAL_MODE_PATH);
 				const pwmLogicalMin = validators.intInRange(refs.pwmMinInput.value, 128, 0, 255);
 				const pwmLogicalMax = validators.intInRange(refs.pwmMaxInput.value, 0, 0, 255);
 				const pwmInverted = (pwmLogicalMin > pwmLogicalMax) ? 1 : 0;
 				const pwmMin = Math.min(pwmLogicalMin, pwmLogicalMax);
 				const pwmMax = Math.max(pwmLogicalMin, pwmLogicalMax);
-				const pwmStartup = 128;
 				const rampUp = validators.intInRange(refs.rampUpInput.value, 25, 1, 255);
 				const rampDown = validators.intInRange(refs.rampDownInput.value, 8, 1, 255);
 				const hysteresis = validators.intInRange(refs.hystInput.value, 2000, 0, 100000);
@@ -302,30 +240,21 @@ const spec = {
 				return;
 			}
 
-			const pack = this._sourceTable.collectEntries();
-			if (pack.active < 1) {
-				ui.addNotification(null, E('p', _('至少启用一个温度源。')), 'danger');
-				return;
-			}
-			if (pack.duplicates.length > 0) {
-				ui.addNotification(null, E('p', _('SOURCE ID 不允许重复: %s').format(pack.duplicates.join(', '))), 'danger');
-				return;
-			}
-			if (pack.errors.length > 0) {
-				ui.addNotification(null, E('p', _('温度源配置无效: %s').format(pack.errors.join(' | '))), 'danger');
-				return;
-			}
+				const pack = this._sourceTable.collectEntries();
+				if (pack.active < 1) {
+					ui.addNotification(null, E('p', _('至少启用一个温度源。')), 'danger');
+					return;
+				}
 
-			const result = await fanRpc.applyBoardConfig({
-				output: output,
-				interval: String(interval),
-				pwm_path: pwmPath,
-				pwm_enable_path: pwmEnablePath,
-				thermal_mode_path: thermalModePath,
-				pwm_min: String(pwmMin),
-				pwm_max: String(pwmMax),
+				const result = await fanRpc.applyBoardConfig({
+					interval: String(interval),
+					control_mode: controlMode,
+					pwm_path: pwmPath,
+					pwm_enable_path: pwmEnablePath,
+					thermal_mode_path: thermalModePath,
+					pwm_min: String(pwmMin),
+					pwm_max: String(pwmMax),
 					pwm_inverted: String(pwmInverted),
-					pwm_startup_pwm: String(pwmStartup),
 					ramp_up: String(rampUp),
 					ramp_down: String(rampDown),
 					hysteresis_mC: String(hysteresis),
@@ -335,7 +264,7 @@ const spec = {
 				});
 
 			if (!result || !result.ok) {
-				ui.addNotification(null, E('p', _('生成配置失败: %s').format(result ? (result.error || '未知错误') : 'RPC 调用失败')), 'danger');
+				ui.addNotification(null, E('p', _('应用失败: %s').format(result ? (result.error || '未知错误') : 'RPC 调用失败')), 'danger');
 				return;
 			}
 
@@ -345,29 +274,28 @@ const spec = {
 				return;
 			}
 
-			await this.refreshControlMode(refs, false);
 			await this.refreshRuntimeStatus(refs, false);
-			ui.addNotification(null, E('p', _('配置已写入 %s').format(result.output || output)), 'info');
+			ui.addNotification(null, E('p', _('配置已写入 %s').format(validators.DEFAULTS.CONFIG_PATH)), 'info');
 		} catch (e) {
-			ui.addNotification(null, E('p', _('生成配置失败: RPC 调用失败')), 'danger');
+			ui.addNotification(null, E('p', _('应用失败: RPC 调用失败')), 'danger');
 		}
 	},
 
 	render: function(data) {
 		const state = data || {};
-		const scan = state.scan || {};
-		const loadedBoard = state.loadedBoard || {};
-		const controlState = state.controlState || {};
-		const runtimeState = state.runtimeState || {};
-		const hasQmodem = state.hasQmodem === true;
-		const channels = Array.isArray(scan.channels) ? scan.channels : [];
-		const pwmDefaults = validators.defaultPwmPaths(channels);
+			const scan = state.scan || {};
+			const loadedBoard = state.loadedBoard || {};
+			const boardDefaults = state.boardDefaults || {};
+			const runtimeState = state.runtimeState || {};
+			const hasQmodem = state.hasQmodem === true;
+			const channels = Array.isArray(scan.channels) ? scan.channels : [];
+			const pwmDefaults = validators.defaultPwmPaths(channels);
 
-		this._sourceTable = sourceTableLib.create();
-		this._submitBusy = false;
+			this._sourceTable = sourceTableLib.create();
+			this._submitBusy = false;
+			this._backendDefaults = (boardDefaults && boardDefaults.ok) ? boardDefaults : null;
 
 		const intervalInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '1', 'min': '1', 'max': '3600', 'style': 'width:8em' });
-		const outputInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': validators.DEFAULTS.CONFIG_PATH, 'style': 'min-width:24em' });
 		const pwmPathInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': pwmDefaults.pwmPath, 'style': 'min-width:24em' });
 		const pwmEnableInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': pwmDefaults.pwmEnablePath, 'style': 'min-width:24em' });
 			const thermalModePathInput = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'value': validators.DEFAULTS.THERMAL_MODE_PATH, 'style': 'min-width:24em' });
@@ -377,8 +305,10 @@ const spec = {
 			const rampDownInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '8', 'min': '1', 'max': '255', 'style': 'width:8em' });
 			const hystInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '2000', 'min': '0', 'max': '100000', 'style': 'width:8em' });
 			const failsafeInput = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': '64', 'min': '0', 'max': '255', 'style': 'width:8em' });
-			const fancontrolToggleInput = E('input', { 'type': 'checkbox' });
-		const modeStatus = E('div', { 'class': 'cbi-value-description', 'style': 'margin-top:0.4em' }, '');
+			const modeSelect = E('select', { 'class': 'cbi-input-select', 'style': 'width:10em' }, [
+				E('option', { 'value': 'kernel' }, _('内核')),
+				E('option', { 'value': 'user' }, _('用户'))
+			]);
 		const runtimeStatus = E('pre', {
 			'class': 'cbi-value-description',
 			'style': 'margin-top:0.4em; white-space:pre-wrap; max-height:16em; overflow:auto;'
@@ -398,10 +328,10 @@ const spec = {
 			'style': 'margin-left:0.5em'
 		}, _('新增 Ubus 温度源'));
 
-		const generateButton = E('button', {
+		const applyButton = E('button', {
 			'class': 'btn cbi-button cbi-button-apply',
 			'type': 'button'
-		}, _('生成 /etc/fancontrol.r3mini'));
+		}, _('应用'));
 
 		const loadButton = E('button', {
 			'class': 'btn cbi-button',
@@ -427,7 +357,6 @@ const spec = {
 
 		const refs = {
 			intervalInput,
-			outputInput,
 				pwmPathInput,
 				pwmEnableInput,
 				thermalModePathInput,
@@ -437,18 +366,17 @@ const spec = {
 				rampDownInput,
 				hystInput,
 				failsafeInput,
-				fancontrolToggleInput,
-				modeStatus,
+				modeSelect,
 				runtimeStatus,
 				submitStatus,
 				tbody
 			};
 
 		refs.baseSubmitControls = [
-			fancontrolToggleInput,
+			modeSelect,
 			addSysfsBtn,
 			addUbusBtn,
-			generateButton,
+			applyButton,
 			loadButton,
 			rescanButton,
 			refreshTelemetryButton,
@@ -456,9 +384,6 @@ const spec = {
 		];
 		refs.submitControls = refs.baseSubmitControls.slice();
 
-		fancontrolToggleInput.addEventListener('change', () => {
-			this.runSubmitAction(refs, () => this.handleToggleFancontrol(refs));
-		});
 		this.bindButtonClick(addSysfsBtn, function() {
 			const sid = this._sourceTable.nextUniqueId('sysfs');
 			this._sourceTable.createSourceRow({
@@ -495,8 +420,8 @@ const spec = {
 			}, tbody);
 			refs.submitControls = refs.baseSubmitControls.concat(this._sourceTable.getAllButtons());
 		});
-		this.bindButtonClick(generateButton, function() {
-			return this.runSubmitAction(refs, () => this.handleGenerate(refs));
+		this.bindButtonClick(applyButton, function() {
+			return this.runSubmitAction(refs, () => this.handleApply(refs));
 		});
 		this.bindButtonClick(loadButton, function() {
 			return this.runSubmitAction(refs, () => this.handleLoadExisting(refs));
@@ -511,13 +436,13 @@ const spec = {
 			return this.resetToDefaults(refs, channels, hasQmodem);
 		});
 
-		const loadFailureLabels = {
-			scan: _('硬件扫描'),
-			loadedBoard: _('读取配置'),
-			controlState: _('读取模式'),
-			runtimeState: _('读取遥测'),
-			hasQmodem: _('探测 qmodem')
-		};
+			const loadFailureLabels = {
+				scan: _('硬件扫描'),
+				loadedBoard: _('读取配置'),
+				boardDefaults: _('读取默认配置'),
+				runtimeState: _('读取遥测'),
+				hasQmodem: _('探测 qmodem')
+			};
 		if (Array.isArray(state.failures) && state.failures.length > 0) {
 			const labels = [];
 			for (let i = 0; i < state.failures.length; i++) {
@@ -533,18 +458,16 @@ const spec = {
 		if (!loadedApplied)
 			this._sourceTable.ensureRows(refs, channels, hasQmodem);
 		refs.submitControls = refs.baseSubmitControls.concat(this._sourceTable.getAllButtons());
-		this.applyControlModeInfo(controlState, refs);
 		this.applyRuntimeStatus(runtimeState, refs);
 		this.startRuntimeAutoRefresh(refs);
 
 		return E('div', { 'class': 'cbi-map' }, [
-			E('h2', _('风扇控制')),
-			E('div', { 'class': 'cbi-section' }, [
-				E('div', { 'style': 'margin-bottom:0.7em' }, [
-					E('label', { 'style': 'display:inline-block; min-width:14em' }, _('启用')),
-					fancontrolToggleInput
-				]),
-				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('输出文件')), outputInput ]),
+					E('h2', _('风扇控制')),
+					E('div', { 'class': 'cbi-section' }, [
+						E('div', { 'style': 'margin-bottom:0.7em' }, [
+							E('label', { 'style': 'display:inline-block; min-width:14em' }, _('模式')),
+							modeSelect
+						]),
 				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('控制周期 (秒)')), intervalInput ]),
 				E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('PWM 路径')), pwmPathInput ]),
 					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('PWM 使能路径')), pwmEnableInput ]),
@@ -555,12 +478,8 @@ const spec = {
 					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('滞回 (mC)')), hystInput ]),
 					E('div', { 'style': 'margin-bottom:0.7em' }, [ E('label', { 'style': 'display:inline-block; min-width:14em' }, _('失效保护 PWM')), failsafeInput ]),
 					E('div', { 'style': 'margin-bottom:0.9em' }, [
-					E('label', { 'style': 'display:inline-block; min-width:14em' }, _('当前模式状态')),
-					modeStatus
-				]),
-				E('div', { 'style': 'margin-bottom:0.9em' }, [
-					E('label', { 'style': 'display:inline-block; min-width:14em; vertical-align:top' }, _('运行遥测')),
-					runtimeStatus
+						E('label', { 'style': 'display:inline-block; min-width:14em; vertical-align:top' }, _('运行遥测')),
+						runtimeStatus
 				]),
 				E('div', { 'style': 'margin-bottom:0.9em' }, [
 					E('label', { 'style': 'display:inline-block; min-width:14em' }, _('提交状态')),
@@ -595,7 +514,7 @@ const spec = {
 				])
 			]),
 			E('div', { 'class': 'cbi-page-actions', 'style': 'display:flex; flex-wrap:wrap; gap:0.5em' }, [
-				generateButton,
+				applyButton,
 				loadButton,
 				rescanButton,
 				refreshTelemetryButton,

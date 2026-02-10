@@ -1,7 +1,7 @@
 'use strict';
 
 const DEFAULTS = {
-	CONFIG_PATH: '/etc/fancontrol.r3mini',
+	CONFIG_PATH: '/etc/fancontrol.conf',
 	MODEM_SECTION: '2_1',
 	PWM_PATH: '/sys/class/hwmon/hwmon2/pwm1',
 	PWM_ENABLE_PATH: '/sys/class/hwmon/hwmon2/pwm1_enable',
@@ -144,9 +144,6 @@ function defaultSources(channels, hasQmodem) {
 function collectEntriesFromRows(rows) {
 	const lines = [];
 	let active = 0;
-	const seen = Object.create(null);
-	const duplicates = [];
-	const errors = [];
 
 	for (let i = 0; i < rows.length; i++) {
 		const row = rows[i] || {};
@@ -166,26 +163,8 @@ function collectEntriesFromRows(rows) {
 		const poll = intInRange(row.poll && row.poll.value, 2, 1, 3600);
 		const weight = intInRange(row.weight && row.weight.value, 100, 1, 200);
 
-		if (enabled === '1') {
+		if (enabled === '1')
 			active++;
-			if (seen[sid])
-				duplicates.push(sid);
-			else
-				seen[sid] = true;
-
-			if (!type)
-				errors.push(_('SOURCE_%s 缺少必填字段: type').format(sid));
-			if (type === 'sysfs' && !sourcePath)
-				errors.push(_('SOURCE_%s 缺少必填字段: path').format(sid));
-			if (type === 'ubus' && (!object || !method || !key))
-				errors.push(_('SOURCE_%s 的 ubus 必填字段缺失').format(sid));
-			if (tStart >= tFull)
-				errors.push(_('SOURCE_%s 阈值无效: t_start 必须小于 t_full').format(sid));
-			if (tFull > tCrit)
-				errors.push(_('SOURCE_%s 阈值无效: t_full 必须小于等于 t_crit').format(sid));
-			if (ttl < poll)
-				errors.push(_('SOURCE_%s 时序无效: ttl 必须大于等于 poll').format(sid));
-		}
 
 		lines.push([
 			enabled,
@@ -207,9 +186,7 @@ function collectEntriesFromRows(rows) {
 
 	return {
 		lines: lines,
-		active: active,
-		duplicates: duplicates,
-		errors: errors
+		active: active
 	};
 }
 

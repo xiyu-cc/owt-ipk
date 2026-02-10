@@ -28,6 +28,7 @@ struct BoardSourceConfig {
 
 struct BoardConfig {
     int interval_sec = 1;
+    std::string control_mode = "kernel";
 
     std::string pwm_path;
     std::string pwm_enable_path;
@@ -35,7 +36,6 @@ struct BoardConfig {
     int pwm_min = 0;
     int pwm_max = 255;
     bool pwm_inverted = true;
-    int pwm_startup_pwm = 128;
     int ramp_up = 25;
     int ramp_down = 8;
     int hysteresis_mC = 2000;

@@ -3,7 +3,7 @@
 This feed is organized by function:
 
 - `application/fancontrol/`: C++ `fancontrol` daemon (board-mode only)
-- `luci/luci-app-fancontrol/`: LuCI board editor for generating `/etc/fancontrol.r3mini`
+- `luci/luci-app-fancontrol/`: LuCI board editor for generating `/etc/fancontrol.conf`
 
 ## OpenWrt SDK build
 

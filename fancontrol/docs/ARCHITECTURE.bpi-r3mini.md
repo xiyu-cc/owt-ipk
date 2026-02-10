@@ -23,6 +23,9 @@ This project is intended for a single-board deployment only (BPI R3 Mini), not f
   - Poll sources, apply TTL timeout, keep last-good samples.
 - `DemandPolicy`
   - Convert each source temperature to PWM demand and arbitrate final target.
+- Source resource ownership
+  - One thermal resource can only be bound by one source definition.
+  - Duplicate bindings (same sysfs path or same ubus object/method/key/args) are rejected at config-parse time.
 - `SafetyGuard`
   - Enforce critical-temp and source-loss fail-safe rules.
 - `PwmController`
@@ -53,7 +56,6 @@ Safety rules:
 - Ramp-up: +25 PWM/s
 - Ramp-down: -8 PWM/s
 - PWM direction: inverted (`PWM_INVERTED=1`)
-- Startup threshold: `PWM_STARTUP_PWM=128`
 - Fail-safe PWM: around `64` (for inverted PWM)
 
 ## Example board config model
@@ -66,7 +68,6 @@ THERMAL_MODE_PATH=/sys/class/thermal/thermal_zone0/mode
 PWM_MIN=0
 PWM_MAX=255
 PWM_INVERTED=1
-PWM_STARTUP_PWM=128
 RAMP_UP=25
 RAMP_DOWN=8
 HYSTERESIS_MC=2000
@@ -84,6 +85,6 @@ SOURCE_rm500=type=ubus,object=qmodem,method=get_temperature,key=temp_mC,args={"c
 2. Done: introduced `SourceManager` and `ITempSource`.
 3. Done: added sysfs + ubus source adapters for SoC/NVMe/RM500 classes of inputs.
 4. Done: integrated `max` demand policy with timeout and critical-temperature fail-safe.
-5. Done: LuCI page can edit and write board profile (`/etc/fancontrol.r3mini`).
+5. Done: LuCI page can edit and write board profile (`/etc/fancontrol.conf`).
 6. Next: add source health/status telemetry in LuCI (last temp, stale flag, poll age).
 7. Done: runtime telemetry exported to `/var/run/fancontrol.status.json` and exposed by LuCI RPC `runtimeStatus`.

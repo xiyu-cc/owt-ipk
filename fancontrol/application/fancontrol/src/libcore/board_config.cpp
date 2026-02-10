@@ -62,12 +62,13 @@ bool to_bool(const std::string &in, const std::string &name) {
     throw std::runtime_error("invalid boolean for " + name + ": " + in);
 }
 
-void validate_json_object_text(const std::string &json_text, const std::string &name) {
+std::string canonicalize_json_object_text(const std::string &json_text, const std::string &name) {
     try {
         const nlohmann::json parsed = nlohmann::json::parse(json_text);
         if (!parsed.is_object()) {
             throw std::runtime_error(name + " must be a JSON object");
         }
+        return parsed.dump();
     } catch (const std::exception &e) {
         throw std::runtime_error("invalid JSON for " + name + ": " + std::string(e.what()));
     }
@@ -237,7 +238,7 @@ BoardSourceConfig parse_source_line(const std::string &id, const std::string &rh
         src.method = kv.at("method");
         src.key = kv.at("key");
         src.args_json = kv.count("args") ? kv.at("args") : "{}";
-        validate_json_object_text(src.args_json, "SOURCE_" + id + " args");
+        src.args_json = canonicalize_json_object_text(src.args_json, "SOURCE_" + id + " args");
     } else {
         throw std::runtime_error("unsupported source type for SOURCE_" + id + ": " + src.type);
     }
@@ -245,16 +246,26 @@ BoardSourceConfig parse_source_line(const std::string &id, const std::string &rh
     return src;
 }
 
+std::string source_resource_key(const BoardSourceConfig &src) {
+    if (src.type == "sysfs") {
+        return "sysfs:" + src.path;
+    }
+    if (src.type == "ubus") {
+        return "ubus:" + src.object + "|" + src.method + "|" + src.key + "|" + src.args_json;
+    }
+    return src.type + ":";
+}
+
 bool is_known_top_level_key(const std::string &key) {
     static const std::unordered_set<std::string> known = {
         "INTERVAL",
+        "CONTROL_MODE",
         "PWM_PATH",
         "PWM_ENABLE_PATH",
         "THERMAL_MODE_PATH",
         "PWM_MIN",
         "PWM_MAX",
         "PWM_INVERTED",
-        "PWM_STARTUP_PWM",
         "RAMP_UP",
         "RAMP_DOWN",
         "HYSTERESIS_MC",
@@ -310,6 +321,19 @@ BoardConfig load_board_config(const std::string &path) {
     if (plain.count("INTERVAL")) {
         cfg.interval_sec = to_int(plain["INTERVAL"], "INTERVAL");
     }
+    if (plain.count("CONTROL_MODE")) {
+        std::string mode = plain["CONTROL_MODE"];
+        std::string lower;
+        lower.reserve(mode.size());
+        for (char c : mode) {
+            lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        if (lower == "kernel" || lower == "user") {
+            cfg.control_mode = lower;
+        } else {
+            throw std::runtime_error("CONTROL_MODE must be one of: kernel, user");
+        }
+    }
     if (plain.count("PWM_PATH")) {
         cfg.pwm_path = plain["PWM_PATH"];
     }
@@ -327,9 +351,6 @@ BoardConfig load_board_config(const std::string &path) {
     }
     if (plain.count("PWM_INVERTED")) {
         cfg.pwm_inverted = to_bool(plain["PWM_INVERTED"], "PWM_INVERTED");
-    }
-    if (plain.count("PWM_STARTUP_PWM")) {
-        cfg.pwm_startup_pwm = to_int(plain["PWM_STARTUP_PWM"], "PWM_STARTUP_PWM");
     }
     if (plain.count("RAMP_UP")) {
         cfg.ramp_up = to_int(plain["RAMP_UP"], "RAMP_UP");
@@ -349,6 +370,9 @@ BoardConfig load_board_config(const std::string &path) {
     if (cfg.interval_sec < 1) {
         throw std::runtime_error("INTERVAL must be >= 1");
     }
+    if (!(cfg.control_mode == "kernel" || cfg.control_mode == "user")) {
+        throw std::runtime_error("CONTROL_MODE must be one of: kernel, user");
+    }
     if (cfg.pwm_min < 0 || cfg.pwm_min > 255) {
         throw std::runtime_error("PWM_MIN must be in range [0, 255]");
     }
@@ -360,9 +384,6 @@ BoardConfig load_board_config(const std::string &path) {
     }
     if (cfg.failsafe_pwm < 0 || cfg.failsafe_pwm > 255) {
         throw std::runtime_error("FAILSAFE_PWM must be in range [0, 255]");
-    }
-    if (cfg.pwm_startup_pwm < -1 || cfg.pwm_startup_pwm > 255) {
-        throw std::runtime_error("PWM_STARTUP_PWM must be -1 or in range [0, 255]");
     }
     if (cfg.ramp_up < 1) {
         throw std::runtime_error("RAMP_UP must be >= 1");
@@ -397,11 +418,19 @@ BoardConfig load_board_config(const std::string &path) {
     }
 
     std::unordered_set<std::string> seen_source_ids;
+    std::unordered_map<std::string, std::string> seen_resource_owner;
     for (const auto &src_line : sources) {
         auto src = parse_source_line(src_line.first, src_line.second, cfg.interval_sec);
         if (!seen_source_ids.insert(src.id).second) {
             throw std::runtime_error("duplicate SOURCE id: " + src.id);
         }
+        const std::string resource = source_resource_key(src);
+        const auto owner = seen_resource_owner.find(resource);
+        if (owner != seen_resource_owner.end()) {
+            throw std::runtime_error("duplicate source resource: SOURCE_" + src.id +
+                                     " conflicts with SOURCE_" + owner->second);
+        }
+        seen_resource_owner.emplace(resource, src.id);
         cfg.sources.push_back(std::move(src));
     }
 
