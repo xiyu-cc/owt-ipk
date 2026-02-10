@@ -3,7 +3,7 @@
     "description": "Grant RPC access for LuCI fancontrol board editor",
     "read": {
       "ubus": {
-        "luci.fancontrol": [ "scan", "loadBoardConfig", "loadBoardDefaults", "runtimeStatus" ]
+        "luci.fancontrol": [ "scan", "loadBoardConfig", "loadBoardDefaults", "loadBoardSchema", "runtimeStatus" ]
       }
     },
     "write": {

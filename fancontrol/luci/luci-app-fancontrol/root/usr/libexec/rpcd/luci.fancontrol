@@ -15,6 +15,39 @@ sanitize_field() {
 	printf '%s' "$1" | tr -d '\r\n;' | sed -e 's/^ *//' -e 's/ *$//'
 }
 
+read_schema_constant() {
+	local key="$1"
+	local fallback="$2"
+	local payload value=""
+
+	[ -x /usr/sbin/fancontrol ] || {
+		echo "$fallback"
+		return
+	}
+
+	payload="$(/usr/sbin/fancontrol --dump-schema-json 2>/dev/null)"
+	[ -n "$payload" ] || {
+		echo "$fallback"
+		return
+	}
+
+	if ! json_load "$payload" >/dev/null 2>&1; then
+		echo "$fallback"
+		return
+	fi
+
+	if json_select constants >/dev/null 2>&1; then
+		json_get_var value "$key"
+	fi
+	json_cleanup
+
+	if [ -n "$value" ]; then
+		echo "$value"
+	else
+		echo "$fallback"
+	fi
+}
+
 read_first_line() {
 	local path="$1"
 	local line
@@ -123,7 +156,7 @@ service_is_running() {
 }
 
 resolve_pidfile_path() {
-	echo "$PIDFILE_DEFAULT"
+	read_schema_constant "pidfile_path" "$PIDFILE_DEFAULT"
 }
 
 scan_channels() {
@@ -195,8 +228,10 @@ scan_channels() {
 }
 
 load_board_config() {
-	local path="$CONFIG_PATH_DEFAULT"
+	local path
 	local payload
+
+	path="$(read_schema_constant "config_path" "$CONFIG_PATH_DEFAULT")"
 
 	[ -x /usr/sbin/fancontrol ] || {
 		json_error "fancontrol binary is missing or not executable"
@@ -219,8 +254,10 @@ load_board_config() {
 }
 
 load_board_defaults() {
-	local path="$CONFIG_PATH_DEFAULT"
+	local path
 	local payload
+
+	path="$(read_schema_constant "config_path" "$CONFIG_PATH_DEFAULT")"
 
 	[ -x /usr/sbin/fancontrol ] || {
 		json_error "fancontrol binary is missing or not executable"
@@ -242,10 +279,35 @@ load_board_defaults() {
 	json_cleanup
 }
 
+load_board_schema() {
+	local payload
+
+	[ -x /usr/sbin/fancontrol ] || {
+		json_error "fancontrol binary is missing or not executable"
+		return
+	}
+
+	payload="$(/usr/sbin/fancontrol --dump-schema-json 2>/dev/null)"
+	[ -n "$payload" ] || {
+		json_error "failed to load board schema via fancontrol"
+		return
+	}
+
+	if ! json_load "$payload" >/dev/null 2>&1; then
+		json_error "fancontrol returned invalid JSON for board schema"
+		return
+	fi
+
+	json_dump
+	json_cleanup
+}
+
 apply_board_config_payload() {
 	local payload="$1"
-	local config_path="$CONFIG_PATH_DEFAULT"
+	local config_path
 	local err
+
+	config_path="$(read_schema_constant "config_path" "$CONFIG_PATH_DEFAULT")"
 
 	[ -x /usr/sbin/fancontrol ] || {
 		json_error "fancontrol binary is missing or not executable"
@@ -264,9 +326,12 @@ apply_board_config_payload() {
 }
 
 runtime_status() {
-	local status_file="$RUNTIME_STATUS_FILE_DEFAULT"
+	local status_file
 	local pidfile running=0
 	local payload
+	local ts now age="" stale=0 info=""
+
+	status_file="$(read_schema_constant "runtime_status_path" "$RUNTIME_STATUS_FILE_DEFAULT")"
 
 	pidfile="$(resolve_pidfile_path)"
 	service_is_running "$pidfile" && running=1
@@ -323,6 +388,38 @@ runtime_status() {
 		json_cleanup
 		return
 	fi
+
+	json_get_var ts timestamp
+	case "$ts" in
+		''|*[!0-9]*)
+			age=""
+		;;
+		*)
+			now="$(date +%s 2>/dev/null)"
+			case "$now" in
+				''|*[!0-9]*)
+					age=""
+				;;
+				*)
+					age=$((now - ts))
+					[ "$age" -lt 0 ] && age=0
+				;;
+			esac
+		;;
+	esac
+
+	if [ "$running" -ne 1 ]; then
+		stale=1
+		info="fancontrol service is not running; runtime status may be stale"
+	elif [ -n "$age" ] && [ "$age" -gt 15 ]; then
+		stale=1
+		info="runtime status is stale (${age}s old)"
+	fi
+
+	json_add_boolean running "$running"
+	json_add_boolean stale "$stale"
+	[ -n "$age" ] && json_add_int age_s "$age"
+	[ -n "$info" ] && json_add_string info "$info"
 	json_dump
 	json_cleanup
 }
@@ -357,21 +454,21 @@ case "$1" in
 		json_close_object
 		json_add_object loadBoardDefaults
 		json_close_object
+		json_add_object loadBoardSchema
+		json_close_object
 		json_add_object applyBoardConfig
 			json_add_string interval "string"
 			json_add_string control_mode "string"
 			json_add_string pwm_path "string"
 			json_add_string pwm_enable_path "string"
-			json_add_string thermal_mode_path "string"
+			json_add_string control_mode_path "string"
 			json_add_string pwm_min "string"
 			json_add_string pwm_max "string"
-			json_add_string pwm_inverted "string"
 			json_add_string ramp_up "string"
 			json_add_string ramp_down "string"
 			json_add_string hysteresis_mC "string"
-			json_add_string policy "string"
 			json_add_string failsafe_pwm "string"
-			json_add_string entries "string"
+			json_add_string sources "array"
 		json_close_object
 		json_add_object runtimeStatus
 		json_close_object
@@ -391,6 +488,9 @@ case "$1" in
 			;;
 			loadBoardDefaults)
 				load_board_defaults
+			;;
+			loadBoardSchema)
+				load_board_schema
 			;;
 			applyBoardConfig)
 				read -r input

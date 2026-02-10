@@ -4,6 +4,11 @@
 
 namespace fancontrol::core {
 
-int apply_ramp(int current_pwm, int target_pwm, const BoardConfig &cfg);
+struct RampAccumulator {
+    double stronger_credit = 0.0;
+    double weaker_credit = 0.0;
+};
+
+int apply_ramp(int current_pwm, int target_pwm, const BoardConfig &cfg, RampAccumulator &accumulator);
 
 } // namespace fancontrol::core

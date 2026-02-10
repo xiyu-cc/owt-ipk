@@ -27,11 +27,12 @@ define Build/Compile
 	$(TARGET_CXX) $(TARGET_CXXFLAGS) $(TARGET_CPPFLAGS) -std=gnu++17 -Wall -Wextra -o \
 		$(PKG_BUILD_DIR)/fancontrol \
 		-I$(PKG_BUILD_DIR) \
-		$(PKG_BUILD_DIR)/app/main.cpp \
-		$(PKG_BUILD_DIR)/libcore/board_config.cpp \
-		$(PKG_BUILD_DIR)/libcore/demand_policy.cpp \
-		$(PKG_BUILD_DIR)/libcore/fancontrol_core.cpp \
-		$(PKG_BUILD_DIR)/libcore/pwm_controller.cpp \
+			$(PKG_BUILD_DIR)/app/main.cpp \
+			$(PKG_BUILD_DIR)/libcore/board_config.cpp \
+			$(PKG_BUILD_DIR)/libcore/config_spec.cpp \
+			$(PKG_BUILD_DIR)/libcore/demand_policy.cpp \
+			$(PKG_BUILD_DIR)/libcore/fancontrol_core.cpp \
+			$(PKG_BUILD_DIR)/libcore/pwm_controller.cpp \
 		$(PKG_BUILD_DIR)/libcore/safety_guard.cpp \
 		$(PKG_BUILD_DIR)/libcore/temp_source.cpp \
 		$(TARGET_LDFLAGS) -lubus -lubox
@@ -44,8 +45,6 @@ define Package/fancontrol/install
 	$(INSTALL_BIN) ./files/fancontrol.init $(1)/etc/init.d/fancontrol
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) ./files/fancontrol.config $(1)/etc/config/fancontrol
-	$(INSTALL_DIR) $(1)/etc
-	$(INSTALL_DATA) ./files/fancontrol.conf $(1)/etc/fancontrol.conf
 	$(INSTALL_DIR) $(1)/usr/share/doc/fancontrol
 	$(INSTALL_DATA) ./files/README.openwrt $(1)/usr/share/doc/fancontrol/README.openwrt
 endef
@@ -55,14 +54,23 @@ define Package/fancontrol/postinst
 [ -n "$${IPKG_INSTROOT}" ] && exit 0
 
 if ! uci -q get fancontrol.main >/dev/null 2>&1; then
-	uci -q batch <<'EOF'
+uci -q batch <<'EOF'
 set fancontrol.main=fancontrol
-set fancontrol.main.debug='0'
 set fancontrol.main.respawn_threshold='3600'
 set fancontrol.main.respawn_timeout='5'
 set fancontrol.main.respawn_retry='5'
 commit fancontrol
 EOF
+fi
+
+if [ ! -s /etc/fancontrol.conf ] && [ -x /usr/sbin/fancontrol ]; then
+	tmp="/etc/fancontrol.conf.tmp.$$"
+	if /usr/sbin/fancontrol --dump-default-config-text > "$$tmp" 2>/dev/null; then
+		chmod 0644 "$$tmp" >/dev/null 2>&1 || true
+		mv "$$tmp" /etc/fancontrol.conf
+	else
+		rm -f "$$tmp"
+	fi
 fi
 
 /etc/init.d/fancontrol enable >/dev/null 2>&1 || true

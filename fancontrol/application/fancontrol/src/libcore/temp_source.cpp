@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <exception>
 #include <fstream>
-#include <iostream>
 #include <limits>
 #include <optional>
 #include <string_view>
@@ -402,29 +401,19 @@ void ubus_invoke_temp_callback(struct ubus_request *req, int /* type */, struct 
         return;
     }
 
-    struct blobmsg_policy policy[3] {};
-    policy[0].name = result.key.c_str();
-    policy[0].type = BLOBMSG_TYPE_UNSPEC;
-    policy[1].name = "error";
-    policy[1].type = BLOBMSG_TYPE_TABLE;
-    policy[2].name = "temperature";
-    policy[2].type = BLOBMSG_TYPE_UNSPEC;
+    struct blobmsg_policy parse_fields[2] {};
+    parse_fields[0].name = result.key.c_str();
+    parse_fields[0].type = BLOBMSG_TYPE_UNSPEC;
+    parse_fields[1].name = "error";
+    parse_fields[1].type = BLOBMSG_TYPE_TABLE;
 
-    struct blob_attr *tb[3] {};
-    blobmsg_parse(policy, 3, tb, blob_data(msg), blob_len(msg));
+    struct blob_attr *tb[2] {};
+    blobmsg_parse(parse_fields, 2, tb, blob_data(msg), blob_len(msg));
 
     if (tb[0]) {
         result.value = blob_attr_to_temp_mc(tb[0], key_prefers_celsius(result.key));
         if (!result.value) {
             result.error = "ubus key is not a temperature-compatible numeric value: " + result.key;
-        }
-        return;
-    }
-
-    if (result.key == "temp_mC" && tb[2]) {
-        result.value = blob_attr_to_temp_mc(tb[2], true);
-        if (!result.value) {
-            result.error = "ubus fallback key is not a temperature-compatible numeric value: temperature";
         }
         return;
     }
@@ -628,7 +617,7 @@ void SourceManager::add(std::unique_ptr<ITempSource> source) {
     runtimes_.push_back(std::move(rt));
 }
 
-void SourceManager::start(bool debug) {
+void SourceManager::start() {
     {
         std::lock_guard<std::mutex> guard(state_mutex_);
         if (running_) {
@@ -642,8 +631,8 @@ void SourceManager::start(bool debug) {
             if (!rt || !rt->source) {
                 continue;
             }
-            rt->worker = std::thread([this, rt, debug]() {
-                run_source_loop(*rt, debug);
+            rt->worker = std::thread([this, rt]() {
+                run_source_loop(*rt);
             });
         }
     } catch (...) {
@@ -678,7 +667,7 @@ void SourceManager::stop() {
     }
 }
 
-void SourceManager::run_source_loop(SourceRuntime &rt, bool debug) {
+void SourceManager::run_source_loop(SourceRuntime &rt) {
     if (!rt.source) {
         return;
     }
@@ -699,17 +688,6 @@ void SourceManager::run_source_loop(SourceRuntime &rt, bool debug) {
             rt.source->publish_failure(std::string("sampling exception: ") + e.what());
         } catch (...) {
             rt.source->publish_failure("sampling exception: unknown");
-        }
-
-        if (debug) {
-            const SourceSnapshot snap = rt.source->snapshot();
-            if (snap.last_sample) {
-                if (snap.last_sample->ok) {
-                    std::cerr << "source[" << rt.source->id() << "]=" << snap.last_sample->temp_mC << "mC\n";
-                } else {
-                    std::cerr << "source[" << rt.source->id() << "] error: " << snap.last_sample->error << "\n";
-                }
-            }
         }
 
         next_deadline += interval;

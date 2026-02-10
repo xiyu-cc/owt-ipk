@@ -11,15 +11,26 @@ CONFIG_FILE="/etc/fancontrol.conf"
 . /lib/functions.sh
 
 start_service() {
-	local debug
 	local respawn_threshold respawn_timeout respawn_retry
+	local tmp
 
 	config_load fancontrol
 
-	config_get_bool debug main debug 0
 	config_get respawn_threshold main respawn_threshold 3600
 	config_get respawn_timeout main respawn_timeout 5
 	config_get respawn_retry main respawn_retry 5
+
+	if [ ! -r "$CONFIG_FILE" ]; then
+		if [ -x "$PROG" ]; then
+			tmp="${CONFIG_FILE}.tmp.$$"
+			if "$PROG" --dump-default-config-text > "$tmp" 2>/dev/null; then
+				chmod 0644 "$tmp" >/dev/null 2>&1 || true
+				mv "$tmp" "$CONFIG_FILE"
+			else
+				rm -f "$tmp"
+			fi
+		fi
+	fi
 
 	if [ ! -r "$CONFIG_FILE" ]; then
 		echo "fancontrol: missing $CONFIG_FILE, generate board config first"
@@ -32,7 +43,6 @@ start_service() {
 	procd_set_param respawn "$respawn_threshold" "$respawn_timeout" "$respawn_retry"
 	procd_set_param stdout 1
 	procd_set_param stderr 1
-	[ "$debug" -eq 1 ] && procd_set_param env DEBUG=1
 	procd_close_instance
 }
 

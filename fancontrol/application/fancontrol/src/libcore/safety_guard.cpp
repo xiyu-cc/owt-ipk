@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <ctime>
 #include <fstream>
-#include <iostream>
 
 #include "libcore/demand_policy.hpp"
 #include "libcore/json.hpp"
@@ -15,8 +14,7 @@ TargetDecision compute_target_decision(const BoardConfig &cfg,
                                        const SourceManager &mgr,
                                        const std::unordered_map<std::string, BoardSourceConfig> &by_id,
                                        std::unordered_map<std::string, bool> &active_state,
-                                       std::vector<SourceTelemetry> &telemetry,
-                                       bool debug) {
+                                       std::vector<SourceTelemetry> &telemetry) {
     const auto now = std::chrono::steady_clock::now();
 
     TargetDecision decision;
@@ -74,10 +72,6 @@ TargetDecision compute_target_decision(const BoardConfig &cfg,
 
         if (source_timeout) {
             decision.any_timeout = true;
-            if (debug) {
-                std::cerr << "source[" << item.id << "] timeout age=" << item.age_sec
-                          << "s ttl=" << src.ttl_sec << "s\n";
-            }
             telemetry.push_back(std::move(item));
             continue;
         }
@@ -97,11 +91,6 @@ TargetDecision compute_target_decision(const BoardConfig &cfg,
         decision.critical = decision.critical || source_critical;
         decision.target_pwm = stronger_cooling_pwm(decision.target_pwm, item.demand_pwm, cfg);
 
-        if (debug) {
-            std::cerr << "source[" << item.id << "] temp=" << item.temp_mC
-                      << " demand=" << item.demand_pwm << " active=" << (item.active ? 1 : 0)
-                      << " using_last_good=" << (item.using_last_good ? 1 : 0) << "\n";
-        }
         telemetry.push_back(std::move(item));
     }
 
@@ -129,7 +118,6 @@ std::string build_runtime_status_json(const BoardConfig &cfg,
     nlohmann::json root = {
         {"ok", 1},
         {"timestamp", static_cast<long long>(now)},
-        {"policy", cfg.policy},
         {"pwm",
          {
              {"current", current_pwm},

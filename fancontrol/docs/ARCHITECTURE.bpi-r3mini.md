@@ -31,20 +31,20 @@ This project is intended for a single-board deployment only (BPI R3 Mini), not f
 - `PwmController`
   - Write `pwmX_enable` and `pwmX`, apply ramp-up/ramp-down limiting.
 - `FanControlService`
-  - Main loop scheduler: sample -> policy -> safety -> output.
+  - Main loop scheduler: sample -> demand -> safety -> output.
 
-## Thermal policy for this board
+## Thermal control model for this board
 
 Use max-demand arbitration on cooling demand:
 
-`target_pwm = max(d_soc, d_nvme, d_rm500)`
+`target_pwm = max(d_soc, d_nvme, d_rm500q_gl)`
 
 Where each demand is linearly interpolated between `T_START` and `T_FULL`.
-For BPI R3 Mini, `PWM_INVERTED=1` means lower PWM value => stronger cooling (`255` is minimum speed, `0` is maximum speed).
+Cooling strength is interpreted along `PWM_MIN -> PWM_MAX`, so either numeric direction is valid (including `PWM_MIN > PWM_MAX`).
 
 Safety rules:
 
-- Any source `>= T_CRIT`: force full speed (`0` when `PWM_INVERTED=1`)
+- Any source `>= T_CRIT`: force full speed (`PWM_MAX`)
 - Source timeout beyond TTL: clamp to `FAILSAFE_PWM`
 - All sources invalid: force full speed
 
@@ -53,10 +53,9 @@ Safety rules:
 - Loop interval: 1s
 - RM500 poll interval: 8-10s
 - Hysteresis: 2C (2000 mC)
-- Ramp-up: +25 PWM/s
-- Ramp-down: -8 PWM/s
-- PWM direction: inverted (`PWM_INVERTED=1`)
-- Fail-safe PWM: around `64` (for inverted PWM)
+- Ramp-up: 5s (PWM_MIN -> PWM_MAX)
+- Ramp-down: 10s (PWM_MAX -> PWM_MIN)
+- Fail-safe PWM: around `64` (board-dependent)
 
 ## Example board config model
 
@@ -64,19 +63,17 @@ Safety rules:
 INTERVAL=1
 PWM_PATH=/sys/class/hwmon/hwmon2/pwm1
 PWM_ENABLE_PATH=/sys/class/hwmon/hwmon2/pwm1_enable
-THERMAL_MODE_PATH=/sys/class/thermal/thermal_zone0/mode
+CONTROL_MODE_PATH=/sys/class/thermal/thermal_zone0/mode
 PWM_MIN=0
 PWM_MAX=255
-PWM_INVERTED=1
-RAMP_UP=25
-RAMP_DOWN=8
+RAMP_UP=5
+RAMP_DOWN=10
 HYSTERESIS_MC=2000
-POLICY=max
 FAILSAFE_PWM=64
 
 SOURCE_soc=type=sysfs,path=/sys/class/thermal/thermal_zone0/temp,t_start=60000,t_full=82000,t_crit=90000,ttl=6
 SOURCE_nvme=type=sysfs,path=/sys/class/hwmon/hwmon3/temp1_input,t_start=50000,t_full=70000,t_crit=80000,ttl=6
-SOURCE_rm500=type=ubus,object=qmodem,method=get_temperature,key=temp_mC,args={"config_section":"modem1"},t_start=58000,t_full=76000,t_crit=85000,ttl=20
+SOURCE_rm500q-gl=type=ubus,object=qmodem,method=get_temperature,key=temp_mC,args={"config_section":"modem1"},t_start=58000,t_full=76000,t_crit=85000,ttl=20
 ```
 
 ## Migration stages
@@ -84,7 +81,7 @@ SOURCE_rm500=type=ubus,object=qmodem,method=get_temperature,key=temp_mC,args={"c
 1. Done: split monolith into `libcore` + `app` without behavior changes.
 2. Done: introduced `SourceManager` and `ITempSource`.
 3. Done: added sysfs + ubus source adapters for SoC/NVMe/RM500 classes of inputs.
-4. Done: integrated `max` demand policy with timeout and critical-temperature fail-safe.
+4. Done: integrated max-demand arbitration with timeout and critical-temperature fail-safe.
 5. Done: LuCI page can edit and write board profile (`/etc/fancontrol.conf`).
 6. Next: add source health/status telemetry in LuCI (last temp, stale flag, poll age).
 7. Done: runtime telemetry exported to `/var/run/fancontrol.status.json` and exposed by LuCI RPC `runtimeStatus`.

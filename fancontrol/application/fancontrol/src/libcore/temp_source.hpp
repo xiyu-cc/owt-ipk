@@ -96,12 +96,12 @@ class SourceManager {
 public:
     ~SourceManager();
     void add(std::unique_ptr<ITempSource> source);
-    void start(bool debug);
+    void start();
     void stop();
     const std::vector<std::shared_ptr<SourceRuntime>> &runtimes() const;
 
 private:
-    void run_source_loop(SourceRuntime &rt, bool debug);
+    void run_source_loop(SourceRuntime &rt);
 
     std::vector<std::shared_ptr<SourceRuntime>> runtimes_;
     mutable std::mutex state_mutex_;

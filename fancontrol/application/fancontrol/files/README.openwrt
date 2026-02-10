@@ -5,8 +5,8 @@ This package installs board-mode `fancontrol` daemon for BPI R3 Mini.
 
 Quick start:
 1. Install required packages and this package.
-2. Create `/etc/fancontrol.conf` (or use LuCI board editor).
-   For BPI R3 Mini PWM polarity, set `PWM_INVERTED=1`.
+2. `/etc/fancontrol.conf` is auto-generated from C++ defaults on first start.
+   (or edit via LuCI board editor afterwards).
 3. Enable and start service:
    /etc/init.d/fancontrol enable
    /etc/init.d/fancontrol start
@@ -20,5 +20,6 @@ Source layout:
 - `src/libcore/fancontrol_core.*`: board-mode control runtime
 - `src/libcore/board_config.*`: board profile parser
 - `src/libcore/temp_source.*`: sysfs/ubus source abstraction + manager
+- `src/libcore/config_spec.*`: single source of truth for defaults/ranges/schema
 - `../docs/ARCHITECTURE.bpi-r3mini.md`: BPI R3 Mini architecture
-- `./fancontrol.conf`: board profile example
+- `/usr/sbin/fancontrol --dump-default-config-text`: emit generated board profile

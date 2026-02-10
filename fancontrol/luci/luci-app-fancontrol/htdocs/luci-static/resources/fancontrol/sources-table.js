@@ -11,6 +11,12 @@ function bindButtonClick(btn, fn) {
 	});
 }
 
+function toText(value, fallback) {
+	if (value == null || value === '')
+		return String(fallback != null ? fallback : '');
+	return String(value);
+}
+
 function SourceTable() {
 	this.rows = [];
 }
@@ -70,17 +76,17 @@ SourceTable.prototype.createSourceRow = function(initial, tbody) {
 	const args = E('input', {
 		'class': 'cbi-input-text',
 		'type': 'text',
-		'value': validators.safeField(initial.args || '{}'),
+		'value': validators.safeField(initial.args || ''),
 		'placeholder': '{}',
 		'style': 'min-width:8em'
 	});
 
-	const tStart = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': String(validators.intInRange(initial.t_start, 60000, 10000, 200000)), 'style': 'width:7em' });
-	const tFull = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': String(validators.intInRange(initial.t_full, 80000, 10000, 220000)), 'style': 'width:7em' });
-	const tCrit = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': String(validators.intInRange(initial.t_crit, 90000, 10000, 250000)), 'style': 'width:7em' });
-	const ttl = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': String(validators.intInRange(initial.ttl, 10, 1, 3600)), 'style': 'width:5em' });
-	const poll = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': String(validators.intInRange(initial.poll, 2, 1, 3600)), 'style': 'width:5em' });
-	const weight = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': String(validators.intInRange(initial.weight, 100, 1, 200)), 'style': 'width:5em' });
+	const tStart = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': toText(initial.t_start, ''), 'style': 'width:7em' });
+	const tFull = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': toText(initial.t_full, ''), 'style': 'width:7em' });
+	const tCrit = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': toText(initial.t_crit, ''), 'style': 'width:7em' });
+	const ttl = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': toText(initial.ttl, ''), 'style': 'width:5em' });
+	const poll = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': toText(initial.poll, ''), 'style': 'width:5em' });
+	const weight = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'value': toText(initial.weight, ''), 'style': 'width:5em' });
 
 	const removeBtn = E('button', {
 		'class': 'btn cbi-button cbi-button-remove',
@@ -150,13 +156,13 @@ SourceTable.prototype.fillRows = function(sourceList, tbody) {
 		this.createSourceRow(sourceList[i], tbody);
 };
 
-SourceTable.prototype.ensureRows = function(refs, channels, hasQmodem) {
+SourceTable.prototype.ensureRows = function(refs, initialSources) {
 	if (!refs || !refs.tbody)
 		return;
 	if (this.rows.length > 0 && refs.tbody.children.length > 0)
 		return;
 
-	const defaults = validators.defaultSources(Array.isArray(channels) ? channels : [], hasQmodem);
+	const defaults = Array.isArray(initialSources) ? initialSources : [];
 	this.fillRows(defaults, refs.tbody);
 };
 
@@ -181,11 +187,23 @@ SourceTable.prototype.nextUniqueId = function(base) {
 	return prefix + n;
 };
 
-SourceTable.prototype.collectEntries = function() {
-	return validators.collectEntriesFromRows(this.rows);
+SourceTable.prototype.collectSources = function() {
+	return validators.collectSourcesFromRows(this.rows);
 };
 
 SourceTable.prototype.applySourceRuntime = function(status) {
+	const statusOk = !!(status && status.ok);
+	const statusRunning = (status && status.running != null) ? !!status.running : true;
+	const statusStale = !!(status && status.stale);
+	if (!statusOk || !statusRunning || statusStale) {
+		for (let i = 0; i < this.rows.length; i++) {
+			const row = this.rows[i];
+			if (row && row.status)
+				row.status.textContent = '-';
+		}
+		return;
+	}
+
 	const sourceById = Object.create(null);
 	const list = (status && Array.isArray(status.sources)) ? status.sources : [];
 	for (let i = 0; i < list.length; i++) {

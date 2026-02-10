@@ -25,6 +25,7 @@
 #include <unistd.h>
 
 #include "libcore/board_config.hpp"
+#include "libcore/config_spec.hpp"
 #include "libcore/demand_policy.hpp"
 #include "libcore/fancontrol_core.hpp"
 #include "libcore/json.hpp"
@@ -36,12 +37,6 @@ namespace {
 
 volatile std::sig_atomic_t g_stop = 0;
 volatile std::sig_atomic_t g_restore_status = 0;
-
-constexpr std::string_view kRuntimeStatusPath = "/var/run/fancontrol.status.json";
-constexpr std::string_view kDefaultConfigPath = "/etc/fancontrol.conf";
-constexpr std::string_view kDefaultThermalModePath = "/sys/class/thermal/thermal_zone0/mode";
-constexpr std::string_view kDefaultPwmPath = "/sys/class/hwmon/hwmon2/pwm1";
-constexpr std::string_view kDefaultPwmEnablePath = "/sys/class/hwmon/hwmon2/pwm1_enable";
 
 void on_signal(int sig) {
     switch (sig) {
@@ -102,22 +97,23 @@ std::optional<std::string> try_read_text(const std::string &path) {
     return value;
 }
 
-bool try_write_int(const std::string &path, int value) {
-    std::ofstream out(path);
-    if (!out) {
+bool try_write_text(const std::string &path, std::string_view value) {
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CLOEXEC);
+    if (fd < 0) {
         return false;
     }
-    out << value << '\n';
-    return out.good();
+
+    const ssize_t written = ::write(fd, value.data(), value.size());
+    bool ok = (written >= 0 && static_cast<std::size_t>(written) == value.size());
+    if (::close(fd) != 0) {
+        ok = false;
+    }
+    return ok;
 }
 
-bool try_write_text(const std::string &path, std::string_view value) {
-    std::ofstream out(path);
-    if (!out) {
-        return false;
-    }
-    out << value << '\n';
-    return out.good();
+bool try_write_int(const std::string &path, int value) {
+    const std::string text = std::to_string(value);
+    return try_write_text(path, text);
 }
 
 std::string trim_ascii(const std::string &s) {
@@ -151,19 +147,6 @@ std::string sanitize_field(std::string s) {
     return trim_ascii(out);
 }
 
-std::vector<std::string> split(const std::string &text, char delim) {
-    std::vector<std::string> out;
-    std::string part;
-    std::istringstream in(text);
-    while (std::getline(in, part, delim)) {
-        out.push_back(part);
-    }
-    if (!text.empty() && text.back() == delim) {
-        out.emplace_back();
-    }
-    return out;
-}
-
 std::string json_value_to_text(const nlohmann::json &obj, const char *key) {
     if (!obj.is_object()) {
         return {};
@@ -192,27 +175,6 @@ std::string json_value_to_text(const nlohmann::json &obj, const char *key) {
     return {};
 }
 
-int parse_int_relaxed(const std::string &raw, int def) {
-    const std::string text = trim_ascii(raw);
-    if (text.empty()) {
-        return def;
-    }
-    try {
-        std::size_t idx = 0;
-        const long long v = std::stoll(text, &idx, 10);
-        if (idx != text.size()) {
-            return def;
-        }
-        if (v < static_cast<long long>(std::numeric_limits<int>::min()) ||
-            v > static_cast<long long>(std::numeric_limits<int>::max())) {
-            return def;
-        }
-        return static_cast<int>(v);
-    } catch (...) {
-        return def;
-    }
-}
-
 std::string normalize_control_mode(std::string raw) {
     raw = to_lower_ascii(sanitize_field(std::move(raw)));
     if (raw == "kernel" || raw == "user") {
@@ -221,82 +183,126 @@ std::string normalize_control_mode(std::string raw) {
     throw std::runtime_error("CONTROL_MODE must be one of: kernel, user");
 }
 
-int parse_bool01(std::string raw, int def) {
+int parse_bool01(std::string raw, int def, const char *name) {
     raw = to_lower_ascii(sanitize_field(std::move(raw)));
     if (raw.empty()) {
         return def;
     }
-    if (raw == "1" || raw == "true" || raw == "yes" || raw == "on") {
+    if (raw == "1" || raw == "true") {
         return 1;
     }
-    if (raw == "0" || raw == "false" || raw == "no" || raw == "off") {
+    if (raw == "0" || raw == "false") {
         return 0;
     }
-    throw std::runtime_error("PWM_INVERTED must be boolean (0/1/true/false)");
+    throw std::runtime_error(std::string(name) + " must be boolean (0/1/true/false)");
 }
 
-fancontrol::core::BoardConfig default_board_config() {
-    fancontrol::core::BoardConfig cfg;
-    cfg.interval_sec = 1;
-    cfg.control_mode = "kernel";
-    cfg.pwm_path = std::string(kDefaultPwmPath);
-    cfg.pwm_enable_path = std::string(kDefaultPwmEnablePath);
-    cfg.thermal_mode_path = std::string(kDefaultThermalModePath);
-    cfg.pwm_min = 0;
-    cfg.pwm_max = 255;
-    cfg.pwm_inverted = true;
-    cfg.ramp_up = 25;
-    cfg.ramp_down = 8;
-    cfg.hysteresis_mC = 2000;
-    cfg.policy = "max";
-    cfg.failsafe_pwm = 64;
+std::optional<int> parse_optional_int(std::string raw, const char *name) {
+    raw = trim_ascii(raw);
+    if (raw.empty()) {
+        return std::nullopt;
+    }
+    try {
+        std::size_t idx = 0;
+        const long long v = std::stoll(raw, &idx, 10);
+        if (idx != raw.size()) {
+            throw std::runtime_error("");
+        }
+        if (v < static_cast<long long>(std::numeric_limits<int>::min()) ||
+            v > static_cast<long long>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error("");
+        }
+        return static_cast<int>(v);
+    } catch (...) {
+        throw std::runtime_error(std::string("invalid integer for ") + name + ": " + raw);
+    }
+}
 
-    cfg.sources.push_back({
-        "soc",
-        "sysfs",
-        "/sys/class/thermal/thermal_zone0/temp",
-        "",
-        "",
-        "",
-        "",
-        60000,
-        82000,
-        90000,
-        6,
-        1,
-        100,
-    });
-    cfg.sources.push_back({
-        "nvme",
-        "sysfs",
-        "/sys/class/nvme/nvme0/hwmon1/temp1_input",
-        "",
-        "",
-        "",
-        "",
-        50000,
-        70000,
-        80000,
-        6,
-        1,
-        120,
-    });
-    cfg.sources.push_back({
-        "rm500",
-        "ubus",
-        "",
-        "qmodem",
-        "get_temperature",
-        "temp_mC",
-        "{\"config_section\":\"2_1\"}",
-        58000,
-        76000,
-        85000,
-        20,
-        10,
-        130,
-    });
-    return cfg;
+std::optional<int> parse_optional_bool01(std::string raw, const char *name) {
+    raw = to_lower_ascii(sanitize_field(std::move(raw)));
+    if (raw.empty()) {
+        return std::nullopt;
+    }
+    return parse_bool01(raw, 0, name);
+}
+
+fancontrol::core::BoardSourceConfig make_rpc_source_defaults(int interval_sec) {
+    const fancontrol::core::ConfigSpec &spec = fancontrol::core::board_config_spec();
+    fancontrol::core::BoardSourceConfig src;
+    src.t_start_mC = spec.source_t_start_mC.default_value;
+    src.t_full_mC = spec.source_t_full_mC.default_value;
+    src.t_crit_mC = spec.source_t_crit_mC.default_value;
+    src.poll_sec = std::max(interval_sec, spec.source_poll_sec.min_value);
+    src.ttl_sec = std::max(src.poll_sec * 2, interval_sec * 2);
+    src.weight = spec.source_weight.default_value;
+    src.args_json = "{}";
+    return src;
+}
+
+std::vector<fancontrol::core::BoardSourceConfig> parse_sources_from_rpc_payload(const nlohmann::json &payload,
+                                                                                 int interval_sec) {
+    const auto it = payload.find("sources");
+    if (it == payload.end()) {
+        return {};
+    }
+    if (!it->is_array()) {
+        throw std::runtime_error("sources must be a JSON array");
+    }
+
+    std::vector<fancontrol::core::BoardSourceConfig> out;
+    out.reserve(it->size());
+
+    for (const auto &entry : *it) {
+        if (!entry.is_object()) {
+            throw std::runtime_error("sources[] items must be JSON objects");
+        }
+
+        if (const auto enabled = parse_optional_bool01(json_value_to_text(entry, "enabled"), "enabled")) {
+            if (*enabled == 0) {
+                continue;
+            }
+        }
+
+        fancontrol::core::BoardSourceConfig src = make_rpc_source_defaults(interval_sec);
+        src.id = sanitize_field(json_value_to_text(entry, "id"));
+        src.type = to_lower_ascii(sanitize_field(json_value_to_text(entry, "type")));
+        src.path = sanitize_field(json_value_to_text(entry, "path"));
+        src.object = sanitize_field(json_value_to_text(entry, "object"));
+        src.method = sanitize_field(json_value_to_text(entry, "method"));
+        src.key = sanitize_field(json_value_to_text(entry, "key"));
+        src.args_json = sanitize_field(json_value_to_text(entry, "args"));
+        if (src.args_json.empty()) {
+            src.args_json = "{}";
+        }
+
+        if (const auto v = parse_optional_int(json_value_to_text(entry, "t_start"), "t_start")) {
+            src.t_start_mC = *v;
+        }
+        if (const auto v = parse_optional_int(json_value_to_text(entry, "t_full"), "t_full")) {
+            src.t_full_mC = *v;
+        }
+        if (const auto v = parse_optional_int(json_value_to_text(entry, "t_crit"), "t_crit")) {
+            src.t_crit_mC = *v;
+        }
+        if (const auto v = parse_optional_int(json_value_to_text(entry, "poll"), "poll")) {
+            src.poll_sec = *v;
+        }
+
+        const bool has_ttl = !trim_ascii(json_value_to_text(entry, "ttl")).empty();
+        if (const auto v = parse_optional_int(json_value_to_text(entry, "ttl"), "ttl")) {
+            src.ttl_sec = *v;
+        } else if (!has_ttl) {
+            src.ttl_sec = std::max(src.poll_sec * 2, interval_sec * 2);
+        }
+
+        if (const auto v = parse_optional_int(json_value_to_text(entry, "weight"), "weight")) {
+            src.weight = *v;
+        }
+
+        out.push_back(std::move(src));
+    }
+
+    return out;
 }
 
 std::optional<pid_t> try_read_pid(const std::string &path) {
@@ -356,7 +362,14 @@ struct BoardPwmSnapshot {
     bool has_enable = false;
 };
 
-bool setup_board_pwm(const fancontrol::core::BoardConfig &cfg, BoardPwmSnapshot &snap, bool debug) {
+struct BoardControlModeSnapshot {
+    std::optional<std::string> orig_mode;
+    bool has_mode = false;
+};
+
+std::string desired_control_mode_value(const fancontrol::core::BoardConfig &cfg);
+
+bool setup_board_pwm(const fancontrol::core::BoardConfig &cfg, BoardPwmSnapshot &snap) {
     snap.has_enable = file_exists(cfg.pwm_enable_path);
     if (snap.has_enable) {
         snap.orig_enable = try_read_int(cfg.pwm_enable_path);
@@ -366,22 +379,42 @@ bool setup_board_pwm(const fancontrol::core::BoardConfig &cfg, BoardPwmSnapshot 
         return false;
     }
 
-    if (debug && snap.has_enable) {
-        std::cerr << "Set " << cfg.pwm_enable_path << " to 1\n";
-    }
     return true;
 }
 
-void restore_board_pwm(const fancontrol::core::BoardConfig &cfg, const BoardPwmSnapshot &snap, bool debug) {
+void restore_board_pwm(const fancontrol::core::BoardConfig &cfg, const BoardPwmSnapshot &snap) {
     if (snap.has_enable) {
         const int enable_to_restore = snap.orig_enable.value_or(0);
-        if (debug) {
-            std::cerr << "Restoring " << cfg.pwm_enable_path << " to " << enable_to_restore << "\n";
-        }
         if (!try_write_int(cfg.pwm_enable_path, enable_to_restore)) {
             (void)try_write_int(cfg.pwm_enable_path, enable_to_restore);
             (void)try_write_int(cfg.pwm_path, fancontrol::core::max_cooling_pwm(cfg));
         }
+    }
+}
+
+bool setup_board_control_mode(const fancontrol::core::BoardConfig &cfg, BoardControlModeSnapshot &snap) {
+    snap.has_mode = file_exists(cfg.control_mode_path);
+    if (!snap.has_mode) {
+        return false;
+    }
+    snap.orig_mode = try_read_text(cfg.control_mode_path);
+
+    const std::string runtime_mode = desired_control_mode_value(cfg);
+    if (!try_write_text(cfg.control_mode_path, runtime_mode)) {
+        return false;
+    }
+
+    return true;
+}
+
+void restore_board_control_mode(const fancontrol::core::BoardConfig &cfg, const BoardControlModeSnapshot &snap) {
+    if (!snap.has_mode) {
+        return;
+    }
+
+    const std::string restore_mode = (snap.orig_mode && !snap.orig_mode->empty()) ? *snap.orig_mode : "enabled";
+    if (!try_write_text(cfg.control_mode_path, restore_mode)) {
+        (void)try_write_text(cfg.control_mode_path, restore_mode);
     }
 }
 
@@ -411,11 +444,16 @@ private:
 
 class BoardPwmGuard {
 public:
-    BoardPwmGuard(const fancontrol::core::BoardConfig &cfg, bool debug) : cfg_(cfg), debug_(debug) {
+    explicit BoardPwmGuard(const fancontrol::core::BoardConfig &cfg) : cfg_(cfg) {
+        if (!setup_board_control_mode(cfg_, control_snapshot_)) {
+            throw std::runtime_error("failed to set control mode via " + cfg_.control_mode_path);
+        }
+        control_armed_ = true;
+
         if (cfg_.control_mode != "user") {
             return;
         }
-        if (!setup_board_pwm(cfg_, snapshot_, debug_)) {
+        if (!setup_board_pwm(cfg_, snapshot_)) {
             throw std::runtime_error("failed to enable PWM in board mode");
         }
         armed_ = true;
@@ -423,7 +461,10 @@ public:
 
     ~BoardPwmGuard() {
         if (armed_) {
-            restore_board_pwm(cfg_, snapshot_, debug_);
+            restore_board_pwm(cfg_, snapshot_);
+        }
+        if (control_armed_) {
+            restore_board_control_mode(cfg_, control_snapshot_);
         }
     }
 
@@ -433,8 +474,9 @@ public:
 private:
     const fancontrol::core::BoardConfig &cfg_;
     BoardPwmSnapshot snapshot_;
-    bool debug_ = false;
+    BoardControlModeSnapshot control_snapshot_;
     bool armed_ = false;
+    bool control_armed_ = false;
 };
 
 class RuntimeStatusGuard {
@@ -458,11 +500,11 @@ private:
 
 class BoardOwnershipGuard {
 public:
-    BoardOwnershipGuard(const fancontrol::core::BoardConfig &cfg, bool debug)
+    explicit BoardOwnershipGuard(const fancontrol::core::BoardConfig &cfg)
         : instance_lock_(fancontrol::core::kFixedPidfilePath),
           pidfile_guard_(fancontrol::core::kFixedPidfilePath),
-          pwm_guard_(cfg, debug),
-          status_guard_(std::string(kRuntimeStatusPath)) {}
+          pwm_guard_(cfg),
+          status_guard_(std::string(fancontrol::core::kRuntimeStatusPath)) {}
 
     bool write_runtime_status(const std::string &payload) const {
         return status_guard_.write(payload);
@@ -497,11 +539,11 @@ bool create_board_sources(const fancontrol::core::BoardConfig &cfg,
     return true;
 }
 
-std::string desired_thermal_mode(const fancontrol::core::BoardConfig &cfg) {
+std::string desired_control_mode_value(const fancontrol::core::BoardConfig &cfg) {
     return (cfg.control_mode == "user") ? "disabled" : "enabled";
 }
 
-int run_board_mode(const fancontrol::core::BoardConfig &cfg, bool debug) {
+int run_board_mode(const fancontrol::core::BoardConfig &cfg) {
     const bool fancontrol_should_own_pwm = (cfg.control_mode == "user");
     if (fancontrol_should_own_pwm) {
         if (::access(cfg.pwm_path.c_str(), W_OK) != 0) {
@@ -513,11 +555,11 @@ int run_board_mode(const fancontrol::core::BoardConfig &cfg, bool debug) {
     if (fancontrol_should_own_pwm && file_exists(cfg.pwm_enable_path) && ::access(cfg.pwm_enable_path.c_str(), W_OK) != 0) {
         throw std::runtime_error("PWM enable path is not writable: " + cfg.pwm_enable_path);
     }
-    if (::access(cfg.thermal_mode_path.c_str(), W_OK) != 0) {
-        throw std::runtime_error("thermal mode path is not writable: " + cfg.thermal_mode_path);
+    if (::access(cfg.control_mode_path.c_str(), W_OK) != 0) {
+        throw std::runtime_error("control mode path is not writable: " + cfg.control_mode_path);
     }
 
-    BoardOwnershipGuard ownership_guard(cfg, debug);
+    BoardOwnershipGuard ownership_guard(cfg);
 
     fancontrol::core::SourceManager mgr;
     std::unordered_map<std::string, fancontrol::core::BoardSourceConfig> by_id;
@@ -527,30 +569,35 @@ int run_board_mode(const fancontrol::core::BoardConfig &cfg, bool debug) {
 
     std::unordered_map<std::string, bool> active_state;
     int current_pwm = try_read_int(cfg.pwm_path).value_or(fancontrol::core::min_cooling_pwm(cfg));
-    const std::string thermal_mode_target = desired_thermal_mode(cfg);
+    fancontrol::core::RampAccumulator ramp_accumulator {};
+    const std::string control_mode_target = desired_control_mode_value(cfg);
     std::optional<std::string> last_observed_mode;
-    mgr.start(debug);
+    if (fancontrol_should_own_pwm) {
+        const int startup_pwm = fancontrol::core::min_cooling_pwm(cfg);
+        if (current_pwm != startup_pwm) {
+            if (!try_write_int(cfg.pwm_path, startup_pwm)) {
+                throw std::runtime_error("Error writing startup PWM value to " + cfg.pwm_path);
+            }
+            current_pwm = startup_pwm;
+        }
+    }
+    mgr.start();
     std::cerr << "Starting board-mode fan control...\n";
     while (!g_stop) {
-        std::string thermal_mode = try_read_text(cfg.thermal_mode_path).value_or("");
-        if (thermal_mode != thermal_mode_target) {
-            if (!try_write_text(cfg.thermal_mode_path, thermal_mode_target)) {
-                throw std::runtime_error("failed to enforce thermal mode via " + cfg.thermal_mode_path);
+        std::string control_mode_value = try_read_text(cfg.control_mode_path).value_or("");
+        if (control_mode_value != control_mode_target) {
+            if (!try_write_text(cfg.control_mode_path, control_mode_target)) {
+                throw std::runtime_error("failed to enforce control mode via " + cfg.control_mode_path);
             }
-            thermal_mode = try_read_text(cfg.thermal_mode_path).value_or("");
+            control_mode_value = try_read_text(cfg.control_mode_path).value_or("");
         }
-        if (!last_observed_mode || *last_observed_mode != thermal_mode) {
-            if (debug) {
-                std::cerr << "control owner: "
-                          << (fancontrol_should_own_pwm ? "fancontrol" : "kernel")
-                          << " (thermal mode=" << (thermal_mode.empty() ? "<unknown>" : thermal_mode) << ")\n";
-            }
-            last_observed_mode = thermal_mode;
+        if (!last_observed_mode || *last_observed_mode != control_mode_value) {
+            last_observed_mode = control_mode_value;
         }
 
         std::vector<fancontrol::core::SourceTelemetry> telemetry;
         const fancontrol::core::TargetDecision decision = fancontrol::core::compute_target_decision(
-            cfg, mgr, by_id, active_state, telemetry, debug);
+            cfg, mgr, by_id, active_state, telemetry);
         const int target = decision.target_pwm;
 
         if (const auto observed_pwm = try_read_int(cfg.pwm_path)) {
@@ -559,25 +606,20 @@ int run_board_mode(const fancontrol::core::BoardConfig &cfg, bool debug) {
 
         int applied_pwm = current_pwm;
         if (fancontrol_should_own_pwm) {
-            int next_pwm = fancontrol::core::apply_ramp(current_pwm, target, cfg);
+            int next_pwm = fancontrol::core::apply_ramp(current_pwm, target, cfg, ramp_accumulator);
 
             if (next_pwm != current_pwm) {
                 if (!try_write_int(cfg.pwm_path, next_pwm)) {
                     throw std::runtime_error("Error writing PWM value to " + cfg.pwm_path);
                 }
                 current_pwm = next_pwm;
-                if (debug) {
-                    std::cerr << "board pwm target=" << target << " applied=" << current_pwm << "\n";
-                }
             }
             applied_pwm = current_pwm;
         }
 
         const std::string status_payload =
             fancontrol::core::build_runtime_status_json(cfg, decision, current_pwm, target, applied_pwm, telemetry);
-        if (!ownership_guard.write_runtime_status(status_payload) && debug) {
-            std::cerr << "warning: failed to write runtime status to " << kRuntimeStatusPath << "\n";
-        }
+        (void)ownership_guard.write_runtime_status(status_payload);
 
         for (int i = 0; i < cfg.interval_sec && !g_stop; ++i) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -591,7 +633,7 @@ std::string pick_config_path(const std::vector<std::string> &args, std::size_t o
     if (args.size() > offset) {
         return args[offset];
     }
-    return std::string(kDefaultConfigPath);
+    return std::string(fancontrol::core::kDefaultConfigPath);
 }
 
 std::string build_board_config_json(const fancontrol::core::BoardConfig &cfg, const std::string &path, bool exists) {
@@ -603,14 +645,12 @@ std::string build_board_config_json(const fancontrol::core::BoardConfig &cfg, co
         {"control_mode", cfg.control_mode},
         {"pwm_path", cfg.pwm_path},
         {"pwm_enable_path", cfg.pwm_enable_path},
-        {"thermal_mode_path", cfg.thermal_mode_path},
+        {"control_mode_path", cfg.control_mode_path},
         {"pwm_min", cfg.pwm_min},
         {"pwm_max", cfg.pwm_max},
-        {"pwm_inverted", cfg.pwm_inverted ? 1 : 0},
         {"ramp_up", cfg.ramp_up},
         {"ramp_down", cfg.ramp_down},
         {"hysteresis_mC", cfg.hysteresis_mC},
-        {"policy", cfg.policy},
         {"failsafe_pwm", cfg.failsafe_pwm},
         {"sources", nlohmann::json::array()}
     };
@@ -640,144 +680,63 @@ std::string build_effective_config_json(const std::string &path) {
     if (file_exists(path)) {
         return build_board_config_json(fancontrol::core::load_board_config(path), path, true);
     }
-    return build_board_config_json(default_board_config(), path, false);
+    return build_board_config_json(fancontrol::core::default_board_config(), path, false);
 }
 
 std::string render_board_config_from_rpc_json(const nlohmann::json &payload) {
-    const int interval = parse_int_relaxed(json_value_to_text(payload, "interval"), 1);
-    const std::string control_mode = normalize_control_mode(json_value_to_text(payload, "control_mode"));
+    fancontrol::core::BoardConfig cfg = fancontrol::core::default_board_config();
+
+    if (const auto v = parse_optional_int(json_value_to_text(payload, "interval"), "INTERVAL")) {
+        cfg.interval_sec = *v;
+    }
+
+    const std::string control_mode_raw = json_value_to_text(payload, "control_mode");
+    if (!trim_ascii(control_mode_raw).empty()) {
+        cfg.control_mode = normalize_control_mode(control_mode_raw);
+    }
+
     const std::string pwm_path = sanitize_field(json_value_to_text(payload, "pwm_path"));
-    std::string pwm_enable_path = sanitize_field(json_value_to_text(payload, "pwm_enable_path"));
-    std::string thermal_mode_path = sanitize_field(json_value_to_text(payload, "thermal_mode_path"));
-    const int pwm_min = parse_int_relaxed(json_value_to_text(payload, "pwm_min"), 0);
-    const int pwm_max = parse_int_relaxed(json_value_to_text(payload, "pwm_max"), 255);
-    const int pwm_inverted = parse_bool01(json_value_to_text(payload, "pwm_inverted"), 1);
-    const int ramp_up = parse_int_relaxed(json_value_to_text(payload, "ramp_up"), 25);
-    const int ramp_down = parse_int_relaxed(json_value_to_text(payload, "ramp_down"), 8);
-    const int hysteresis_mC = parse_int_relaxed(json_value_to_text(payload, "hysteresis_mC"), 2000);
-    std::string policy = to_lower_ascii(sanitize_field(json_value_to_text(payload, "policy")));
-    const int failsafe_pwm = parse_int_relaxed(json_value_to_text(payload, "failsafe_pwm"), 64);
-    const std::string entries = json_value_to_text(payload, "entries");
-
-    if (interval < 1) {
-        throw std::runtime_error("INTERVAL must be >= 1");
-    }
-    if (pwm_path.empty()) {
-        throw std::runtime_error("missing PWM path");
-    }
-    if (pwm_min < 0 || pwm_min > 255) {
-        throw std::runtime_error("PWM_MIN must be in range [0, 255]");
-    }
-    if (pwm_max < 0 || pwm_max > 255) {
-        throw std::runtime_error("PWM_MAX must be in range [0, 255]");
-    }
-    if (pwm_min > pwm_max) {
-        throw std::runtime_error("PWM_MIN must be <= PWM_MAX");
-    }
-    if (failsafe_pwm < 0 || failsafe_pwm > 255) {
-        throw std::runtime_error("FAILSAFE_PWM must be in range [0, 255]");
-    }
-    if (ramp_up < 1) {
-        throw std::runtime_error("RAMP_UP must be >= 1");
-    }
-    if (ramp_down < 1) {
-        throw std::runtime_error("RAMP_DOWN must be >= 1");
-    }
-    if (hysteresis_mC < 0) {
-        throw std::runtime_error("HYSTERESIS_MC must be >= 0");
-    }
-    if (policy.empty()) {
-        policy = "max";
-    }
-    if (policy != "max") {
-        throw std::runtime_error("unsupported POLICY: " + policy + " (only 'max' is supported)");
+    if (!pwm_path.empty()) {
+        cfg.pwm_path = pwm_path;
     }
 
-    if (pwm_enable_path.empty()) {
-        pwm_enable_path = pwm_path + "_enable";
-    }
-    if (thermal_mode_path.empty()) {
-        thermal_mode_path = std::string(kDefaultThermalModePath);
+    const std::string pwm_enable_path = sanitize_field(json_value_to_text(payload, "pwm_enable_path"));
+    if (!pwm_enable_path.empty()) {
+        cfg.pwm_enable_path = pwm_enable_path;
     }
 
-    std::vector<std::string> source_lines;
-    for (const auto &line_raw : split(entries, '\n')) {
-        if (line_raw.empty()) {
-            continue;
-        }
-        const auto cols = split(line_raw, ';');
-        if (cols.size() != 14) {
-            throw std::runtime_error("invalid source entry format");
-        }
-
-        const std::string enabled = sanitize_field(cols[0]);
-        if (enabled != "1") {
-            continue;
-        }
-
-        const std::string sid = sanitize_field(cols[1]);
-        const std::string type = to_lower_ascii(sanitize_field(cols[2]));
-        const std::string source_path = sanitize_field(cols[3]);
-        const std::string object = sanitize_field(cols[4]);
-        const std::string method = sanitize_field(cols[5]);
-        const std::string key = sanitize_field(cols[6]);
-        std::string args = sanitize_field(cols[7]);
-        const int t_start = parse_int_relaxed(cols[8], 60000);
-        const int t_full = parse_int_relaxed(cols[9], 80000);
-        const int t_crit = parse_int_relaxed(cols[10], 90000);
-        const std::string ttl_raw = trim_ascii(cols[11]);
-        const std::string poll_raw = trim_ascii(cols[12]);
-        const int poll = poll_raw.empty() ? interval : parse_int_relaxed(poll_raw, interval);
-        const int ttl = ttl_raw.empty() ? std::max(poll * 2, interval * 2) : parse_int_relaxed(ttl_raw, 10);
-        const int weight = parse_int_relaxed(cols[13], 100);
-
-        if (sid.empty()) {
-            throw std::runtime_error("empty SOURCE id is not allowed");
-        }
-        if (args.empty()) {
-            args = "{}";
-        }
-
-        if (type == "sysfs") {
-            source_lines.push_back("SOURCE_" + sid + "=type=sysfs,path=" + source_path + ",t_start=" +
-                                   std::to_string(t_start) + ",t_full=" + std::to_string(t_full) + ",t_crit=" +
-                                   std::to_string(t_crit) + ",ttl=" + std::to_string(ttl) +
-                                   ",poll=" + std::to_string(poll) + ",weight=" + std::to_string(weight));
-        } else if (type == "ubus") {
-            source_lines.push_back("SOURCE_" + sid + "=type=ubus,object=" + object + ",method=" + method +
-                                   ",key=" + key + ",args=" + args + ",t_start=" + std::to_string(t_start) +
-                                   ",t_full=" + std::to_string(t_full) + ",t_crit=" + std::to_string(t_crit) +
-                                   ",ttl=" + std::to_string(ttl) + ",poll=" + std::to_string(poll) +
-                                   ",weight=" + std::to_string(weight));
-        } else {
-            throw std::runtime_error("unsupported source type for SOURCE_" + sid + ": " + type);
-        }
+    const std::string control_mode_path = sanitize_field(json_value_to_text(payload, "control_mode_path"));
+    if (!control_mode_path.empty()) {
+        cfg.control_mode_path = control_mode_path;
     }
 
-    if (source_lines.empty()) {
-        throw std::runtime_error("no active sources selected");
+    if (const auto v = parse_optional_int(json_value_to_text(payload, "pwm_min"), "PWM_MIN")) {
+        cfg.pwm_min = *v;
+    }
+    if (const auto v = parse_optional_int(json_value_to_text(payload, "pwm_max"), "PWM_MAX")) {
+        cfg.pwm_max = *v;
+    }
+    if (const auto v = parse_optional_int(json_value_to_text(payload, "ramp_up"), "RAMP_UP")) {
+        cfg.ramp_up = *v;
+    }
+    if (const auto v = parse_optional_int(json_value_to_text(payload, "ramp_down"), "RAMP_DOWN")) {
+        cfg.ramp_down = *v;
+    }
+    if (const auto v = parse_optional_int(json_value_to_text(payload, "hysteresis_mC"), "HYSTERESIS_MC")) {
+        cfg.hysteresis_mC = *v;
     }
 
-    std::ostringstream out;
-    out << "# Configuration file generated by fancontrol\n";
-    out << "INTERVAL=" << interval << '\n';
-    out << "CONTROL_MODE=" << control_mode << '\n';
-    out << "PWM_PATH=" << pwm_path << '\n';
-    out << "PWM_ENABLE_PATH=" << pwm_enable_path << '\n';
-    out << "THERMAL_MODE_PATH=" << thermal_mode_path << '\n';
-    out << "PWM_MIN=" << pwm_min << '\n';
-    out << "PWM_MAX=" << pwm_max << '\n';
-    out << "PWM_INVERTED=" << pwm_inverted << '\n';
-    out << "RAMP_UP=" << ramp_up << '\n';
-    out << "RAMP_DOWN=" << ramp_down << '\n';
-    out << "HYSTERESIS_MC=" << hysteresis_mC << '\n';
-    out << "POLICY=" << policy << '\n';
-    out << "FAILSAFE_PWM=" << failsafe_pwm << '\n';
-    for (const auto &line : source_lines) {
-        out << line << '\n';
+    if (const auto v = parse_optional_int(json_value_to_text(payload, "failsafe_pwm"), "FAILSAFE_PWM")) {
+        cfg.failsafe_pwm = *v;
     }
 
-    return out.str();
+    const bool has_sources_field = payload.find("sources") != payload.end();
+    if (has_sources_field) {
+        cfg.sources = parse_sources_from_rpc_payload(payload, cfg.interval_sec);
+    }
+
+    fancontrol::core::validate_board_config(cfg);
+    return fancontrol::core::render_board_config_text(cfg);
 }
 
 void write_validated_config_from_rpc_json(const std::string &config_path, const std::string &payload_text) {
@@ -834,11 +793,6 @@ void write_validated_config_from_rpc_json(const std::string &config_path, const 
 namespace fancontrol::core {
 
 int run(const std::vector<std::string> &args) {
-    const bool debug = []() {
-        const auto d = std::getenv("DEBUG");
-        return d && *d && std::string(d) != "0";
-    }();
-
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
     std::signal(SIGHUP, on_signal);
@@ -865,7 +819,17 @@ int run(const std::vector<std::string> &args) {
         }
         if (args.size() > 1 && args[1] == "--dump-default-config-json") {
             const std::string config = pick_config_path(args, 2);
-            std::cout << build_board_config_json(default_board_config(), config, false) << '\n';
+            std::cout << build_board_config_json(fancontrol::core::default_board_config(), config, false) << '\n';
+            return 0;
+        }
+        if (args.size() > 1 && args[1] == "--dump-default-config-text") {
+            BoardConfig cfg = fancontrol::core::default_board_config();
+            fancontrol::core::validate_board_config(cfg);
+            std::cout << fancontrol::core::render_board_config_text(cfg);
+            return 0;
+        }
+        if (args.size() > 1 && args[1] == "--dump-schema-json") {
+            std::cout << fancontrol::core::dump_board_schema_json() << '\n';
             return 0;
         }
         if (args.size() > 1 && args[1] == "--apply-config-json") {
@@ -883,7 +847,7 @@ int run(const std::vector<std::string> &args) {
         g_restore_status = 0;
 
         const BoardConfig bcfg = load_board_config(config);
-        return run_board_mode(bcfg, debug);
+        return run_board_mode(bcfg);
     } catch (const std::exception &e) {
         std::cerr << "fancontrol: " << e.what() << '\n';
         return 1;

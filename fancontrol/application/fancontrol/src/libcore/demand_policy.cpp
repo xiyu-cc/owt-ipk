@@ -6,18 +6,24 @@
 namespace fancontrol::core {
 
 int min_cooling_pwm(const BoardConfig &cfg) {
-    return cfg.pwm_inverted ? cfg.pwm_max : cfg.pwm_min;
+    return cfg.pwm_min;
 }
 
 int max_cooling_pwm(const BoardConfig &cfg) {
-    return cfg.pwm_inverted ? cfg.pwm_min : cfg.pwm_max;
+    return cfg.pwm_max;
 }
 
 bool is_stronger_cooling_pwm(int candidate, int baseline, const BoardConfig &cfg) {
-    if (cfg.pwm_inverted) {
-        return candidate < baseline;
+    const int bounded_candidate = clamp_pwm(cfg, candidate);
+    const int bounded_baseline = clamp_pwm(cfg, baseline);
+    const int span = cfg.pwm_max - cfg.pwm_min;
+    if (span == 0) {
+        return false;
     }
-    return candidate > baseline;
+    const int dir = (span > 0) ? 1 : -1;
+    const long long cand_level = static_cast<long long>(bounded_candidate - cfg.pwm_min) * dir;
+    const long long base_level = static_cast<long long>(bounded_baseline - cfg.pwm_min) * dir;
+    return cand_level > base_level;
 }
 
 int stronger_cooling_pwm(int lhs, int rhs, const BoardConfig &cfg) {
@@ -25,7 +31,9 @@ int stronger_cooling_pwm(int lhs, int rhs, const BoardConfig &cfg) {
 }
 
 int clamp_pwm(const BoardConfig &cfg, int pwm) {
-    return std::clamp(pwm, cfg.pwm_min, cfg.pwm_max);
+    const int lo = std::min(cfg.pwm_min, cfg.pwm_max);
+    const int hi = std::max(cfg.pwm_min, cfg.pwm_max);
+    return std::clamp(pwm, lo, hi);
 }
 
 int demand_from_source(const BoardConfig &cfg,
@@ -73,12 +81,7 @@ int demand_from_source(const BoardConfig &cfg,
     ratio = std::clamp(ratio, 0.0, 1.0);
 
     const int span = cfg.pwm_max - cfg.pwm_min;
-    int demand = idle_pwm;
-    if (cfg.pwm_inverted) {
-        demand = cfg.pwm_max - static_cast<int>(std::lround(ratio * static_cast<double>(span)));
-    } else {
-        demand = cfg.pwm_min + static_cast<int>(std::lround(ratio * static_cast<double>(span)));
-    }
+    const int demand = cfg.pwm_min + static_cast<int>(std::lround(ratio * static_cast<double>(span)));
     return clamp_pwm(cfg, demand);
 }
 

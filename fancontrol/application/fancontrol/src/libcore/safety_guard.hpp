@@ -35,8 +35,7 @@ TargetDecision compute_target_decision(const BoardConfig &cfg,
                                        const SourceManager &mgr,
                                        const std::unordered_map<std::string, BoardSourceConfig> &by_id,
                                        std::unordered_map<std::string, bool> &active_state,
-                                       std::vector<SourceTelemetry> &telemetry,
-                                       bool debug);
+                                       std::vector<SourceTelemetry> &telemetry);
 
 std::string build_runtime_status_json(const BoardConfig &cfg,
                                       const TargetDecision &decision,

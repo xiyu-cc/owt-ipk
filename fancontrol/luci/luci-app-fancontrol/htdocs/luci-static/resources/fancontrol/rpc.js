@@ -16,13 +16,18 @@ const callLoadBoardDefaults = rpc.declare({
 	method: 'loadBoardDefaults'
 });
 
+const callLoadBoardSchema = rpc.declare({
+	object: 'luci.fancontrol',
+	method: 'loadBoardSchema'
+});
+
 const callApplyBoardConfig = rpc.declare({
 	object: 'luci.fancontrol',
 	method: 'applyBoardConfig',
 	params: [
-		'interval', 'control_mode', 'pwm_path', 'pwm_enable_path', 'thermal_mode_path',
-		'pwm_min', 'pwm_max', 'pwm_inverted', 'ramp_up', 'ramp_down',
-		'hysteresis_mC', 'policy', 'failsafe_pwm', 'entries'
+		'interval', 'control_mode', 'pwm_path', 'pwm_enable_path', 'control_mode_path',
+		'pwm_min', 'pwm_max', 'ramp_up', 'ramp_down',
+		'hysteresis_mC', 'failsafe_pwm', 'sources'
 	]
 });
 
@@ -48,13 +53,13 @@ function mapSettledLoad(results) {
 	const data = {
 		scan: {},
 		loadedBoard: {},
-		boardDefaults: {},
+		boardSchema: {},
 		runtimeState: {},
 		hasQmodem: false,
 		failures: []
 	};
 
-	const fields = [ 'scan', 'loadedBoard', 'boardDefaults', 'runtimeState', 'hasQmodem' ];
+	const fields = [ 'scan', 'loadedBoard', 'boardSchema', 'runtimeState', 'hasQmodem' ];
 	for (let i = 0; i < fields.length; i++) {
 		const key = fields[i];
 		const item = results[i];
@@ -74,7 +79,7 @@ function loadInitial() {
 	return Promise.allSettled([
 		callScan(),
 		callLoadBoardConfig(),
-		callLoadBoardDefaults(),
+		callLoadBoardSchema(),
 		callRuntimeStatus(),
 		probeQmodem()
 	]).then(mapSettledLoad);
@@ -87,16 +92,14 @@ function applyBoardConfig(payload) {
 		p.control_mode,
 		p.pwm_path,
 		p.pwm_enable_path,
-		p.thermal_mode_path,
+		p.control_mode_path,
 		p.pwm_min,
 		p.pwm_max,
-		p.pwm_inverted,
 		p.ramp_up,
 		p.ramp_down,
 		p.hysteresis_mC,
-		p.policy,
 		p.failsafe_pwm,
-		p.entries
+		p.sources
 	);
 }
 
@@ -105,6 +108,7 @@ return L.Class.extend({
 	loadInitial: loadInitial,
 	loadBoardConfig: callLoadBoardConfig,
 	loadBoardDefaults: callLoadBoardDefaults,
+	loadBoardSchema: callLoadBoardSchema,
 	runtimeStatus: callRuntimeStatus,
 	serviceAction: callServiceAction,
 	applyBoardConfig: applyBoardConfig
