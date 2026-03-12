@@ -187,8 +187,11 @@ update_config()
     esac
     modem_net=$(find $modem_path -name net |tail -1)
     modem_netcard=$(ls $modem_net)
-    interface_name=$modem_config
-    [ -n "$alias" ] && interface_name=$alias
+    interface_name=$(resolve_modem_interface_name "$modem_config" "$alias")
+    valid_alias=$(normalize_interface_alias "$alias")
+    if [ -n "$alias" ] && [ -z "$valid_alias" ];then
+        m_debug "ignore invalid alias '$alias', use interface '$interface_name'"
+    fi
     interface6_name=${interface_name}v6
 }
 

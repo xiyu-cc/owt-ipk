@@ -15,6 +15,21 @@ var callInitAction = rpc.declare({
 	expect: { result: false }
 });
 
+function validateAliasValue(value) {
+	var v = (value || '').trim();
+
+	if (!v)
+		return true;
+
+	if (v === '-')
+		return _('Alias "-" is reserved as a placeholder. Leave it empty or use letters, numbers and underscore.');
+
+	if (!/^[A-Za-z0-9_]+$/.test(v))
+		return _('Only letters, numbers and underscore are allowed.');
+
+	return true;
+}
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -253,7 +268,7 @@ return view.extend({
 
 		o = s.option(form.DummyValue, 'alias', _('Modem Alias'));
 		o.cfgvalue = function(section_id) {
-			return uci.get('qmodem', section_id, 'alias') || '-';
+			return uci.get('qmodem', section_id, 'alias') || 'QMODEM';
 		};
 
 	o = s.option(form.DummyValue, 'state', _('Status'));
@@ -303,12 +318,15 @@ return view.extend({
 
 	// ============ Modal Configuration Options ============
 	
-	// General Settings
-	o = s.option(form.Value, 'alias', _('Modem Alias'));
-	o.rmempty = true;
-	o.modalonly = true;
+		// General Settings
+		o = s.option(form.Value, 'alias', _('Modem Alias'));
+		o.rmempty = true;
+		o.modalonly = true;
+		o.validate = function(section_id, value) {
+			return validateAliasValue(value);
+		};
 
-	o = s.option(form.DynamicList, 'dns_list', _('DNS'));
+		o = s.option(form.DynamicList, 'dns_list', _('DNS'));
 	o.placeholder = _('If the DNS server is not set, it will use the DNS server leased by the operator.');
 	o.rmempty = true;
 	o.modalonly = true;

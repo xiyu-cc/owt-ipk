@@ -64,6 +64,21 @@ var callRemoveModem = rpc.declare({
 	expect: { }
 });
 
+function validateAliasValue(value) {
+	var v = (value || '').trim();
+
+	if (!v)
+		return true;
+
+	if (v === '-')
+		return _('Alias "-" is reserved as a placeholder. Leave it empty or use letters, numbers and underscore.');
+
+	if (!/^[A-Za-z0-9_]+$/.test(v))
+		return _('Only letters, numbers and underscore are allowed.');
+
+	return true;
+}
+
 return view.extend({
 	load: function() {
 		return Promise.all([
@@ -296,13 +311,18 @@ return view.extend({
 		o.rmempty = false;
 		o.modalonly = true;
 
-		o = s.option(form.Value, 'name', _('Model Name'));
-		o.placeholder = _('e.g.') + ' RG500Q';
-		o.rmempty = false;	o = s.option(form.Value, 'alias', _('Alias'));
-	o.placeholder = _('e.g.') + ' Modem1';
-	o.editable = true;
+			o = s.option(form.Value, 'name', _('Model Name'));
+			o.placeholder = _('e.g.') + ' RG500Q';
+			o.rmempty = false;
 
-	o = s.option(form.Value, 'path', _('Device Path'));
+			o = s.option(form.Value, 'alias', _('Alias'));
+			o.placeholder = _('e.g.') + ' Modem1';
+			o.editable = true;
+			o.validate = function(section_id, value) {
+				return validateAliasValue(value);
+			};
+
+		o = s.option(form.Value, 'path', _('Device Path'));
 	o.placeholder = _('e.g.') + ' /sys/bus/usb/devices/1-1';
 	o.rmempty = false;
 	o.readonly = true;	o = s.option(form.Value, 'at_port', _('AT Port'));
@@ -417,10 +437,13 @@ return view.extend({
 		});
 	}
 
-	o = s.option(form.Value, 'alias', _('Default Alias'));
-	o.description = _('After setting this option, the first module loaded into this slot will automatically be assigned this default alias.');
-	o.placeholder = _('e.g.') + ' Modem';
-	o.editable = true;
+		o = s.option(form.Value, 'alias', _('Default Alias'));
+		o.description = _('After setting this option, the first module loaded into this slot will automatically be assigned this default alias.');
+		o.placeholder = _('e.g.') + ' Modem';
+		o.editable = true;
+		o.validate = function(section_id, value) {
+			return validateAliasValue(value);
+		};
 
 	o = s.option(form.Value, 'default_metric', _('Default Metric'));
 	o.description = _('The first module loaded into this slot will automatically be assigned this default metric.');

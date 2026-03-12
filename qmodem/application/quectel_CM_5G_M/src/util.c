@@ -177,10 +177,15 @@ void update_resolv_conf(int iptype, const char *ifname, const char *dns1, const 
     #define MAX_DNS 16
     char *dns_info[MAX_DNS];
     char dns_tag[64];
+    char legacy_dns_tag[64];
     int dns_match = 0;
+    int skip_tagged_dns = 0;
     int i;
 
-    snprintf(dns_tag, sizeof(dns_tag), "# IPV%d %s", iptype, ifname);
+    /* Keep managed entries identifiable without appending inline comments. */
+    snprintf(dns_tag, sizeof(dns_tag), "# QMODEM IPV%d %s", iptype, ifname);
+    /* Backward compatibility with old inline tag format. */
+    snprintf(legacy_dns_tag, sizeof(legacy_dns_tag), "# IPV%d %s", iptype, ifname);
 
     for (i = 0; i < MAX_DNS; i++)
         dns_info[i] = NULL;
@@ -194,9 +199,17 @@ void update_resolv_conf(int iptype, const char *ifname, const char *dns1, const 
             if ((strlen(dns_line) > 1) && (dns_line[strlen(dns_line) - 1] == '\n'))
                 dns_line[strlen(dns_line) - 1] = '\0';
             //dbg_time("%s", dns_line);
-            if (strstr(dns_line, dns_tag)) {
+            if (strstr(dns_line, dns_tag) || strstr(dns_line, legacy_dns_tag)) {
                 dns_match++;
+                /* New format: skip the following managed nameserver lines. */
+                if (!strncmp(dns_line, dns_tag, strlen(dns_tag)))
+                    skip_tagged_dns = 1;
                 continue;
+            }
+            if (skip_tagged_dns) {
+                if (!strncmp(dns_line, "nameserver ", 11))
+                    continue;
+                skip_tagged_dns = 0;
             }
             dns_info[i++] = strdup(dns_line);
             if (i == MAX_DNS)
@@ -215,10 +228,12 @@ void update_resolv_conf(int iptype, const char *ifname, const char *dns1, const 
 
     dns_fp = fopen(dns_file, "w");
     if (dns_fp) {
+        if (dns1 || dns2)
+            fprintf(dns_fp, "%s\n", dns_tag);
         if (dns1)
-            fprintf(dns_fp, "nameserver %s %s\n", dns1, dns_tag);
+            fprintf(dns_fp, "nameserver %s\n", dns1);
         if (dns2)
-            fprintf(dns_fp, "nameserver %s %s\n", dns2, dns_tag);
+            fprintf(dns_fp, "nameserver %s\n", dns2);
         
         for (i = 0; i < MAX_DNS && dns_info[i]; i++)
             fprintf(dns_fp, "%s\n", dns_info[i]);

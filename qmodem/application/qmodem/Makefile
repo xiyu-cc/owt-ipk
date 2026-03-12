@@ -1,5 +1,4 @@
 include $(TOPDIR)/rules.mk
-include $(INCLUDE_DIR)/kernel.mk
 
 # Include unified version
 include ../../version.mk

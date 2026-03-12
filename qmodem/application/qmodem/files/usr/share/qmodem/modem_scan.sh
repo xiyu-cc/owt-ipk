@@ -42,6 +42,41 @@ get_default_metric()
     config_foreach _get_default_metric_by_slot
 }
 
+_check_modem_alias_in_use()
+{
+    local cfg="$1"
+    local existing_alias
+    [ "$alias_in_use" = "1" ] && return
+    config_get existing_alias "$cfg" alias
+    existing_alias=$(normalize_interface_alias "$existing_alias")
+    [ -n "$existing_alias" ] && [ "$existing_alias" = "$alias_candidate" ] && alias_in_use="1"
+}
+
+is_modem_alias_in_use()
+{
+    alias_candidate=$(normalize_interface_alias "$1")
+    [ -z "$alias_candidate" ] && return 1
+    alias_in_use="0"
+    config_load qmodem
+    config_foreach _check_modem_alias_in_use modem-device
+    [ "$alias_in_use" = "1" ]
+}
+
+allocate_default_alias()
+{
+    local requested_alias="$1"
+    local base_alias candidate index
+    base_alias=$(normalize_interface_alias "$requested_alias")
+    [ -z "$base_alias" ] && base_alias="QMODEM"
+    candidate="$base_alias"
+    index=1
+    while is_modem_alias_in_use "$candidate"; do
+        candidate="${base_alias}_${index}"
+        index=$((index+1))
+    done
+    echo "$candidate"
+}
+
 _get_associated_usb_by_path()
 {
     local cfg="$1"
@@ -444,11 +479,19 @@ add()
     [ -z "$modem_name" ] && lock -u /tmp/lock/modem_add_$slot && return
     m_debug  "add modem $modem_name slot $slot slot_type $slot_type"
     if [ -n "$is_exist" ]; then
+        local origin_alias fixed_alias
         #network at_port state name 不变，则不需要重启网络
         orig_network=$(uci -q get qmodem.$section_name.network)
         orig_at_port=$(uci -q get qmodem.$section_name.at_port)
         orig_state=$(uci -q get qmodem.$section_name.state)
         orig_name=$(uci -q get qmodem.$section_name.name)
+        origin_alias=$(uci -q get qmodem.$section_name.alias)
+        fixed_alias=$(normalize_interface_alias "$origin_alias")
+        if [ -z "$fixed_alias" ]; then
+            fixed_alias=$(allocate_default_alias "QMODEM")
+            uci -q set qmodem.${section_name}.alias="$fixed_alias"
+            m_debug "fix empty/invalid alias for $section_name -> $fixed_alias"
+        fi
         uci -q del qmodem.$section_name.modes
         uci -q del qmodem.$section_name.valid_at_ports
         uci -q del qmodem.$section_name.tty_devices
@@ -464,12 +507,13 @@ add()
         get_default_alias $slot
         get_default_metric $slot
         get_led_sript_by_slot $slot
+        default_alias=$(allocate_default_alias "$default_alias")
         modem_count=$(uci -q get qmodem.main.modem_count)
         [ -z "$modem_count" ] && modem_count=0
         modem_count=$(($modem_count+1))
         uci -q set qmodem.main.modem_count=$modem_count
         uci -q set qmodem.$section_name=modem-device
-        [ -n "$default_alias" ] && uci -q set  qmodem.${section_name}.alias="$default_alias"
+        uci -q set qmodem.${section_name}.alias="$default_alias"
         [ -n "$led_script" ] && uci -q set qmodem.${section_name}.led_script="$led_script"
         uci commit qmodem
         lock -u /tmp/lock/modem_add

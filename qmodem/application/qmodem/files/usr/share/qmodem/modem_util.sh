@@ -81,6 +81,84 @@ m_debug ()
 	fi
 }
 
+# Use a safe subset because alias is used as a UCI section name.
+normalize_interface_alias()
+{
+	local alias="$1"
+	alias=$(printf '%s' "$alias" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+	case "$alias" in
+		""|"-"|"--"|"null"|"NULL"|"none"|"NONE")
+			echo ""
+			return 1
+			;;
+	esac
+	echo "$alias" | grep -Eq '^[A-Za-z0-9_]+$' || {
+		echo ""
+		return 1
+	}
+	echo "$alias"
+	return 0
+}
+
+_qmodem_find_iface_by_modem_config_cb()
+{
+	local cfg="$1"
+	local bind_modem_config ifname device
+	[ -n "$_QMODEM_FOUND_IFACE" ] && return
+	config_get bind_modem_config "$cfg" modem_config
+	[ "$bind_modem_config" != "$_QMODEM_TARGET_MODEM_CFG" ] && return
+	config_get ifname "$cfg" ifname
+	config_get device "$cfg" device
+	case "$ifname" in
+		@*)
+			return
+			;;
+	esac
+	case "$device" in
+		@*)
+			return
+			;;
+	esac
+	_QMODEM_FOUND_IFACE="$cfg"
+}
+
+find_interface_by_modem_config()
+{
+	local modem_cfg="$1"
+	[ -z "$modem_cfg" ] && return
+	_QMODEM_TARGET_MODEM_CFG="$modem_cfg"
+	_QMODEM_FOUND_IFACE=""
+	config_load network
+	config_foreach _qmodem_find_iface_by_modem_config_cb interface
+	echo "$_QMODEM_FOUND_IFACE"
+}
+
+resolve_modem_interface_name()
+{
+	local modem_cfg="$1"
+	local alias="$2"
+	local valid_alias existing_iface bind_modem_config
+	valid_alias=$(normalize_interface_alias "$alias")
+	[ -n "$valid_alias" ] && {
+		echo "$valid_alias"
+		return
+	}
+	existing_iface=$(find_interface_by_modem_config "$modem_cfg")
+	[ -n "$existing_iface" ] && {
+		echo "$existing_iface"
+		return
+	}
+	# Compatibility path for legacy/manual setups using network.wwan.
+	uci -q get network.wwan >/dev/null 2>&1 && {
+		bind_modem_config=$(uci -q get network.wwan.modem_config)
+		[ -z "$bind_modem_config" ] || [ "$bind_modem_config" = "$modem_cfg" ] && {
+			echo "wwan"
+			return
+		}
+	}
+	echo "$modem_cfg"
+}
+
 update_sim_slot()
 {
 	. /lib/functions.sh

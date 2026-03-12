@@ -72,18 +72,18 @@ update_cfg(){
 }
 
 update_netcfg(){
-	# if alias is set, network config name is alias else modem_cfg name
+	local valid_alias
+	# Prefer a valid alias, then existing network section bound to modem_config.
 	config_load network
-	if [ -n "$ALIAS" ]; then
-		config_get NET_DEV "$ALIAS" ifname
-        Ifv4="$ALIAS"
-	else
-		config_get NET_DEV "$Modem_ID" ifname
-        Ifv4="$Modem_ID"
-	fi
+	valid_alias=$(normalize_interface_alias "$ALIAS")
+	Ifv4=$(resolve_modem_interface_name "$Modem_ID" "$ALIAS")
+	[ -n "$ALIAS" ] && [ -z "$valid_alias" ] && log "ignore invalid alias '$ALIAS', use interface '$Ifv4'"
+	config_get NET_DEV "$Ifv4" device
+	[ -z "$NET_DEV" ] && config_get NET_DEV "$Ifv4" ifname
     Ifv6="$Ifv4"v6
-    v4_info=$(ifstatus $Ifv4)
-    v6_info=$(ifstatus $Ifv6)
+    v4_info=$(ifstatus "$Ifv4")
+    v6_info=$(ifstatus "$Ifv6")
+    [ -z "$NET_DEV" ] && NET_DEV=$(echo "$v4_info" | jq -r '.l3_device // empty')
     dns_v4=$(echo $v4_info | jq -r --arg "key" "dns-server" '.[$key][0]')
     dns_v6=$(echo $v6_info | jq -r --arg "key" "dns-server" '.[$key][0]')
     gateway_v4=$(echo $v4_info | jq -r --arg "key" "route" '.[$key][] | select(.target == "0.0.0.0") | .nexthop')
