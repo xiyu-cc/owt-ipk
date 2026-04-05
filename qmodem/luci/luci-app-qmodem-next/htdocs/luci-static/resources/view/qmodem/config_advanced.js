@@ -842,7 +842,7 @@ return view.extend({
 					scs: ''
 				};
 				qmodem.setNeighborCell(modem.id, unlockConfig).then(function(result) {
-					if (result) {
+					if (self.isSetNeighborCellSuccess(result)) {
 						ui.addNotification(null, E('p', _('Cell unlocked successfully')), 'success');
 						// Update cached status locally to avoid long-running get_neighborcell calls
 						self.updateNeighborCellLockCache(modem.id, unlockConfig);
@@ -887,7 +887,7 @@ return view.extend({
 				submitButton.textContent = _('Applying...');
 
 				qmodem.setNeighborCell(modem.id, config).then(function(result) {
-					if (result) {
+					if (self.isSetNeighborCellSuccess(result)) {
 						ui.addNotification(null, E('p', _('Lock cell configuration applied successfully')), 'success');
 						// Update cached status locally to avoid long-running get_neighborcell calls
 						self.updateNeighborCellLockCache(modem.id, config);
@@ -929,6 +929,7 @@ return view.extend({
 			start: 0,
 			timer: null
 		};
+		this.refreshNeighborCellLockStatus(modem, statusContent);
 
 		return container;
 	},
@@ -972,6 +973,41 @@ return view.extend({
 		info.start = 0;
 		if (!showElapsed)
 			info.el.style.display = 'none';
+	},
+
+	refreshNeighborCellLockStatus: function(modem, statusContent) {
+		var self = this;
+		statusContent = statusContent || document.getElementById('lockcell_status_' + modem.id);
+		if (!statusContent)
+			return;
+
+		var scanMode = '2';
+		if (self.neighborCellInputs && self.neighborCellInputs[modem.id] &&
+			self.neighborCellInputs[modem.id].scanMode) {
+			scanMode = self.neighborCellInputs[modem.id].scanMode.value;
+		}
+		if (scanMode !== '1' && scanMode !== '2')
+			scanMode = '2';
+
+		var statusParams = { async: 1, force: 0, timeout: 60, scan_mode: scanMode };
+		qmodem.getNeighborCell(modem.id, statusParams).then(function(result) {
+			if (!result || !result.neighborcell || typeof result.neighborcell !== 'object')
+				return;
+
+			var lockcellStatus = result.neighborcell.lockcell_status;
+			if (!lockcellStatus || typeof lockcellStatus !== 'object')
+				return;
+			if (!self.hasNonEmptyLockStatus(lockcellStatus))
+				return;
+
+			if (self.isTransientLockStatus(lockcellStatus))
+				return;
+
+			self.updateNeighborCellLockCacheFromStatus(modem.id, lockcellStatus);
+			self.updateLockCellStatus(modem, statusContent, lockcellStatus);
+		}).catch(function(e) {
+			console.warn('refreshNeighborCellLockStatus error:', e);
+		});
 	},
 
 	getCurrentPlmn: function(modem) {
@@ -1387,7 +1423,7 @@ return view.extend({
 			}
 
 			if (statusItems.length === 0) {
-				dom.content(statusContent, E('em', {}, _('Cell is unlocked (no lock active)')));
+				dom.content(statusContent, E('em', {}, _('No status information available')));
 			} else {
 				var statusDiv = E('div', {});
 				statusItems.forEach(function(item) {
@@ -1423,6 +1459,10 @@ return view.extend({
 			status.LTE_PCI = config.pci || '';
 		}
 		return status;
+	},
+
+	isSetNeighborCellSuccess: function(result) {
+		return !!result;
 	},
 
 	neighborCellCacheKey: function(modemId) {
@@ -1479,6 +1519,49 @@ return view.extend({
 		this.saveNeighborCellCache(modemId, cache);
 	},
 
+	updateNeighborCellLockCacheFromStatus: function(modemId, lockcellStatus) {
+		if (!lockcellStatus || typeof lockcellStatus !== 'object')
+			return;
+
+		var cache = this.loadNeighborCellCache(modemId) || {};
+		var data = cache.data || {};
+		if (!Array.isArray(data.NR))
+			data.NR = [];
+		if (!Array.isArray(data.LTE))
+			data.LTE = [];
+		data.lockcell_status = lockcellStatus;
+		cache.data = data;
+		cache.ts = Date.now();
+		this.saveNeighborCellCache(modemId, cache);
+	},
+
+	isTransientLockStatus: function(lockcellStatus) {
+		var hasValue = false;
+		var hasNonScanningValue = false;
+		for (var key in lockcellStatus) {
+			if (!Object.prototype.hasOwnProperty.call(lockcellStatus, key))
+				continue;
+			var value = lockcellStatus[key];
+			if (value === '' || value === null || value === undefined)
+				continue;
+			hasValue = true;
+			if (value.toString().toLowerCase() !== 'scanning')
+				hasNonScanningValue = true;
+		}
+		return hasValue && !hasNonScanningValue;
+	},
+
+	hasNonEmptyLockStatus: function(lockcellStatus) {
+		for (var key in lockcellStatus) {
+			if (!Object.prototype.hasOwnProperty.call(lockcellStatus, key))
+				continue;
+			var value = lockcellStatus[key];
+			if (value !== '' && value !== null && value !== undefined)
+				return true;
+		}
+		return false;
+	},
+
 	renderNeighborCellFromCache: function(modem, neighborList) {
 		var self = this;
 		var cache = self.loadNeighborCellCache(modem.id);
@@ -1492,7 +1575,7 @@ return view.extend({
 
 		var statusContent = document.getElementById('lockcell_status_' + modem.id);
 		if (statusContent) {
-			if (lockcellStatus && typeof lockcellStatus === 'object') {
+			if (lockcellStatus && typeof lockcellStatus === 'object' && self.hasNonEmptyLockStatus(lockcellStatus)) {
 				self.updateLockCellStatus(modem, statusContent, lockcellStatus);
 			} else {
 				dom.content(statusContent, E('em', {}, _('No status information available')));
