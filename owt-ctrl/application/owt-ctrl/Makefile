@@ -48,12 +48,14 @@ define Build/Compile
 				$(PKG_BUILD_DIR)/src/core/log.cpp \
 				$(PKG_BUILD_DIR)/src/core/config.cpp \
 				$(PKG_BUILD_DIR)/src/core/utils.cpp \
+				$(PKG_BUILD_DIR)/src/core/host_probe_agent.cpp \
 				$(PKG_BUILD_DIR)/src/core/params_store.cpp \
 				$(PKG_BUILD_DIR)/src/core/wakeonlan_sender.cpp \
 				$(PKG_BUILD_DIR)/src/core/ssh_executor.cpp \
 				$(PKG_BUILD_DIR)/src/api/wol_wake_api.cpp \
 				$(PKG_BUILD_DIR)/src/api/host_control_api.cpp \
 				$(PKG_BUILD_DIR)/src/api/host_probe_api.cpp \
+				$(PKG_BUILD_DIR)/src/api/monitoring_api.cpp \
 				$(PKG_BUILD_DIR)/src/api/params_api.cpp \
 				$(TARGET_LDFLAGS) -pthread -lssh2
 endef

@@ -8,6 +8,8 @@
 - `POST /api/v1/host/reboot`
 - `POST /api/v1/host/poweroff`
 - `GET /api/v1/host/probe`
+- `GET /api/v1/monitoring/get`
+- `POST /api/v1/monitoring/set`
 
 ## 开发
 
@@ -33,7 +35,8 @@ npm run build
 
 ## 说明
 
-- 前端固定请求地址：`http://openwrt.lan:9527`。
+- 前端请求地址：`http://<当前网关地址>:9527`。
 - 页面加载时自动读取服务端参数，修改后通过保存接口写回 `params.ini`。
-- 页面开启后每秒调用一次探针接口，展示目标设备在线状态与 CPU/MEM/上下行速率。
+- 服务端内置常驻探针 agent，统一采集目标设备状态并缓存。
+- 页面开启后每秒调用一次探针接口，前端读取的是服务端缓存，不会为每个前端重复发起 SSH 采集。
 - 当前请求为明文 HTTP，公网场景建议加 HTTPS 反向代理与鉴权。

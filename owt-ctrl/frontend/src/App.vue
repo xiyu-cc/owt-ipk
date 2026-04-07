@@ -1,7 +1,8 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 
-const API_BASE = 'http://openwrt.lan:9527'
+const gatewayHost = window.location.hostname || '192.168.1.1'
+const API_BASE = `http://${gatewayHost}:9527`
 
 const paramsBusy = ref(false)
 const actionBusy = ref(false)
@@ -10,6 +11,8 @@ const initialized = ref(false)
 const lastError = ref('')
 const lastAction = ref(null)
 const probeInFlight = ref(false)
+const monitoringBusy = ref(false)
+const monitoringEnabled = ref(true)
 
 let probeTimer = null
 
@@ -45,11 +48,13 @@ const controlsBusy = computed(() => paramsBusy.value || actionBusy.value)
 const probeDotColor = computed(() => {
   if (probe.status === 'online') return 'var(--success)'
   if (probe.status === 'offline') return 'var(--danger)'
+  if (probe.status === 'paused') return 'var(--muted)'
   return 'var(--muted)'
 })
 const probeStatusText = computed(() => {
   if (probe.status === 'online') return '在线'
   if (probe.status === 'offline') return '离线'
+  if (probe.status === 'paused') return '已暂停'
   return '未知'
 })
 
@@ -142,6 +147,9 @@ function setActionResult(title, summary, fields = []) {
 }
 
 function setProbeData(data) {
+  if (typeof data.monitoring_enabled === 'boolean') {
+    monitoringEnabled.value = data.monitoring_enabled
+  }
   probe.status = typeof data.status === 'string' ? data.status : 'unknown'
   probe.message = typeof data.message === 'string' ? data.message : '-'
   probe.host = typeof data.host === 'string' ? data.host : ''
@@ -298,8 +306,54 @@ async function probeHost() {
   }
 }
 
+async function loadMonitoringState({ silent = false } = {}) {
+  monitoringBusy.value = true
+  try {
+    const resp = await requestApi('/api/v1/monitoring/get')
+    const enabled = Boolean(resp?.data?.enabled)
+    monitoringEnabled.value = enabled
+    if (!silent) {
+      setActionResult('状态监控', enabled ? '状态监控已开启' : '状态监控已关闭', [
+        { label: '监控状态', value: enabled ? '开启' : '关闭' }
+      ])
+    }
+    return true
+  } catch (err) {
+    if (!silent) {
+      lastError.value = toErrorMessage(err)
+    }
+    return false
+  } finally {
+    monitoringBusy.value = false
+  }
+}
+
+async function setMonitoringEnabled(enabled) {
+  monitoringBusy.value = true
+  lastError.value = ''
+  try {
+    const resp = await requestApi('/api/v1/monitoring/set', 'POST', { enabled })
+    monitoringEnabled.value = Boolean(resp?.data?.enabled)
+    setActionResult(
+      '状态监控',
+      monitoringEnabled.value ? '状态监控已开启' : '状态监控已关闭',
+      [{ label: '监控状态', value: monitoringEnabled.value ? '开启' : '关闭' }]
+    )
+    await probeHost()
+  } catch (err) {
+    lastError.value = toErrorMessage(err)
+  } finally {
+    monitoringBusy.value = false
+  }
+}
+
+async function toggleMonitoring() {
+  await setMonitoringEnabled(!monitoringEnabled.value)
+}
+
 onMounted(async () => {
   await loadParams({ silent: true })
+  await loadMonitoringState({ silent: true })
   await probeHost()
   probeTimer = setInterval(probeHost, 1000)
 })
@@ -320,7 +374,7 @@ onUnmounted(() => {
     <section class="card title-bar">
       <p class="kicker">OWT LAN CONTROL</p>
       <h1>局域网设备控制中心</h1>
-      <p class="chip">管理地址：<strong>{{ API_BASE }}</strong></p>
+      <p class="chip">管理地址：<strong>网关（{{ gatewayHost }}:9527）</strong></p>
     </section>
 
     <section class="card controls">
@@ -342,6 +396,9 @@ onUnmounted(() => {
         <span>目标状态：<strong>{{ probeStatusText }}</strong></span>
         <span>主机：<strong>{{ probe.host || sshForm.host || '-' }}</strong></span>
         <span>消息：{{ probe.message }}</span>
+        <button class="mini-btn" @click="toggleMonitoring" :disabled="monitoringBusy">
+          状态监控：{{ monitoringEnabled ? '开' : '关' }}
+        </button>
       </div>
 
       <div class="probe-grid">

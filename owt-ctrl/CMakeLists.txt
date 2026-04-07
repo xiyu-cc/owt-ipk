@@ -24,12 +24,14 @@ add_executable(${OWT_CTRL_TARGET}
   src/core/log.cpp
   src/core/config.cpp
   src/core/utils.cpp
+  src/core/host_probe_agent.cpp
   src/core/params_store.cpp
   src/core/wakeonlan_sender.cpp
   src/core/ssh_executor.cpp
   src/api/wol_wake_api.cpp
   src/api/host_control_api.cpp
   src/api/host_probe_api.cpp
+  src/api/monitoring_api.cpp
   src/api/params_api.cpp
 )
 
