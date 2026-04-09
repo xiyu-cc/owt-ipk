@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(owt_ctrl LANGUAGES C CXX)
+project(owt_net LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,7 +20,7 @@ set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/spdlog EXCLUDE_FROM_ALL)
 add_subdirectory(third_party/nlohmann EXCLUDE_FROM_ALL)
 
-set(OWT_CTRL_TARGET owt_ctrl)
+set(OWT_NET_TARGET owt_net)
 set(OWT_CTRL_ENABLE_GRPC_TRANSPORT 0)
 set(OWT_CTRL_GRPC_LINK_LIBS)
 set(OWT_CTRL_GRPC_INCLUDE_DIRS)
@@ -126,11 +126,11 @@ if (OWT_CTRL_ENABLE_GRPC_TRANSPORT)
   list(APPEND OWT_CTRL_SOURCES ${OWT_CTRL_PROTO_GENERATED_SOURCES})
 endif()
 
-add_executable(${OWT_CTRL_TARGET} ${OWT_CTRL_SOURCES})
+add_executable(${OWT_NET_TARGET} ${OWT_CTRL_SOURCES})
 
-set_target_properties(${OWT_CTRL_TARGET} PROPERTIES OUTPUT_NAME "owt-ctrl")
+set_target_properties(${OWT_NET_TARGET} PROPERTIES OUTPUT_NAME "owt-net")
 
-target_include_directories(${OWT_CTRL_TARGET}
+target_include_directories(${OWT_NET_TARGET}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost
@@ -139,24 +139,24 @@ target_include_directories(${OWT_CTRL_TARGET}
 )
 
 if (OWT_CTRL_ENABLE_GRPC_TRANSPORT)
-  target_include_directories(${OWT_CTRL_TARGET} PRIVATE ${OWT_CTRL_PROTO_GEN_DIR})
+  target_include_directories(${OWT_NET_TARGET} PRIVATE ${OWT_CTRL_PROTO_GEN_DIR})
 endif()
 
-target_compile_definitions(${OWT_CTRL_TARGET}
+target_compile_definitions(${OWT_NET_TARGET}
   PRIVATE
     BOOST_ERROR_CODE_HEADER_ONLY
     OWT_CTRL_ENABLE_GRPC_TRANSPORT=$<BOOL:${OWT_CTRL_ENABLE_GRPC_TRANSPORT}>
 )
 
 if (LIBSSH2_INCLUDE_DIR AND LIBSSH2_LIBRARY)
-  target_compile_definitions(${OWT_CTRL_TARGET} PRIVATE OWT_CTRL_ENABLE_LIBSSH2=1)
-  target_include_directories(${OWT_CTRL_TARGET} PRIVATE ${LIBSSH2_INCLUDE_DIR})
-  target_link_libraries(${OWT_CTRL_TARGET} PRIVATE ${LIBSSH2_LIBRARY})
+  target_compile_definitions(${OWT_NET_TARGET} PRIVATE OWT_CTRL_ENABLE_LIBSSH2=1)
+  target_include_directories(${OWT_NET_TARGET} PRIVATE ${LIBSSH2_INCLUDE_DIR})
+  target_link_libraries(${OWT_NET_TARGET} PRIVATE ${LIBSSH2_LIBRARY})
 else()
-  target_compile_definitions(${OWT_CTRL_TARGET} PRIVATE OWT_CTRL_ENABLE_LIBSSH2=0)
+  target_compile_definitions(${OWT_NET_TARGET} PRIVATE OWT_CTRL_ENABLE_LIBSSH2=0)
 endif()
 
-target_link_libraries(${OWT_CTRL_TARGET}
+target_link_libraries(${OWT_NET_TARGET}
   PRIVATE
     spdlog::spdlog_header_only
     nlohmann_json::nlohmann_json

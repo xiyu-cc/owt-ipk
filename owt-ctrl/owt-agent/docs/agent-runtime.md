@@ -4,7 +4,7 @@
 
 1. 启动时读取 `config.ini` 并初始化本地存储。
 2. 按配置启动 WSS/gRPC 控制通道。
-3. 向 `owt-ctrl` 发送 `REGISTER`。
+3. 向 `owt-net` 发送 `REGISTER`。
 4. 周期发送 `HEARTBEAT`。
 5. 收到 `COMMAND_PUSH` 后立即回 `COMMAND_ACK`。
 6. 执行命令并回传 `COMMAND_RESULT`。

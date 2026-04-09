@@ -2,7 +2,7 @@
 
 ## 1. 适用范围
 
-- 本文协议仅用于 `VPS (owt-ctrl) <-> Gateway (owt-agent)` 控制通道。
+- 本文协议仅用于 `VPS (owt-net) <-> Gateway (owt-agent)` 控制通道。
 - 浏览器不使用本协议，浏览器只调用 VPS 的 `HTTPS API`。
 - 当前并行实现：`WSS(JSON)` 生产主线，`gRPC` 实验并行线。
 
@@ -162,7 +162,7 @@
 
 ## 10. gRPC(proto) 映射
 
-- proto 草案文件：`proto/control_channel.proto`
+- proto 草案文件：`../owt-net/proto/control_channel.proto`
 - gRPC 服务模式：双向流
   - `rpc Connect(stream Envelope) returns (stream Envelope);`
 
@@ -174,6 +174,5 @@
 ## 11. Phase 0 交付清单
 
 - 本文档：统一协议语义定义（source of truth）。
-- `proto/control_channel.proto`：gRPC 草案接口。
+- `../owt-net/proto/control_channel.proto`：gRPC 草案接口。
 - 后续代码实现只允许在此基础上加可选字段，不允许改动既有字段语义。
-

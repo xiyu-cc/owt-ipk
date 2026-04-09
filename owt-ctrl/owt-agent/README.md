@@ -2,7 +2,7 @@
 
 `owt-agent` 是运行在网关侧（OpenWrt）的执行面进程，职责：
 
-- 主动连接 `owt-ctrl`（WSS / gRPC）
+- 主动连接 `owt-net`（WSS / gRPC）
 - 接收命令并执行本地动作（WOL / SSH / Probe / Params）
 - 回传 ACK 与执行结果，并落地本地命令审计库
 
@@ -12,7 +12,7 @@
 - `include/service/*`：执行能力与本地存储接口
 - `src/core/*`：agent 主程序、配置、日志、执行逻辑
 - `proto/*`：控制通道 proto
-- `docs/*`：agent 侧设计文档
+- `docs/*`：agent 侧实现文档（主文档在顶层 `../docs/`）
 
 ## 配置
 
@@ -39,7 +39,7 @@ cmake --build --preset gcc-debug
 
 生成：`build/gcc-debug/owt-agent`
 
-说明：默认会优先使用 `owt-agent/third_party`；不存在时自动回退到 `../owt-ctrl/third_party`。
+说明：默认会优先使用 `owt-agent/third_party`；不存在时自动回退到 `../owt-net/third_party`。
 
 ## 运行
 

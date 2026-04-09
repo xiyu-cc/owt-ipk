@@ -16,8 +16,8 @@ namespace service {
 
 namespace {
 
-constexpr const char* kSystemDbPath = "/etc/owt-ctrl/owt_ctrl.db";
-constexpr const char* kLocalDbPath = "owt_ctrl.db";
+constexpr const char* kSystemDbPath = "/etc/owt-net/owt_net.db";
+constexpr const char* kLocalDbPath = "owt_net.db";
 
 std::mutex g_db_mutex;
 sqlite3* g_db = nullptr;
@@ -25,7 +25,7 @@ std::string g_db_path;
 
 std::string choose_db_path() {
   try {
-    const std::filesystem::path dir("/etc/owt-ctrl");
+    const std::filesystem::path dir("/etc/owt-net");
     if (std::filesystem::exists(dir)) {
       if (::access(dir.c_str(), W_OK) == 0) {
         return kSystemDbPath;

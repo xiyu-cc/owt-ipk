@@ -1,3 +1,7 @@
 .codex
 owt-ctrl/build/
 owt-ctrl/third_party/
+
+owt-ctrl/owt-net/third_party/
+owt-ctrl/owt-agent/build/
+owt-ctrl/owt-net/build/

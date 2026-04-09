@@ -10,14 +10,14 @@ find_package(PkgConfig QUIET)
 
 set(OWT_AGENT_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 if (NOT EXISTS "${OWT_AGENT_THIRD_PARTY_DIR}/spdlog/CMakeLists.txt")
-  set(OWT_AGENT_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../owt-ctrl/third_party")
+  set(OWT_AGENT_THIRD_PARTY_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../owt-net/third_party")
 endif()
 
 if (NOT EXISTS "${OWT_AGENT_THIRD_PARTY_DIR}/spdlog/CMakeLists.txt")
-  message(FATAL_ERROR "third_party/spdlog not found, expected in owt-agent/third_party or ../owt-ctrl/third_party")
+  message(FATAL_ERROR "third_party/spdlog not found, expected in owt-agent/third_party or ../owt-net/third_party")
 endif()
 if (NOT EXISTS "${OWT_AGENT_THIRD_PARTY_DIR}/nlohmann/CMakeLists.txt")
-  message(FATAL_ERROR "third_party/nlohmann not found, expected in owt-agent/third_party or ../owt-ctrl/third_party")
+  message(FATAL_ERROR "third_party/nlohmann not found, expected in owt-agent/third_party or ../owt-net/third_party")
 endif()
 
 set(OWT_AGENT_SQLITE3_SOURCE "${OWT_AGENT_THIRD_PARTY_DIR}/sqlite3/sqlite3.c")

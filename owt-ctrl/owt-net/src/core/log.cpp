@@ -17,8 +17,8 @@ constexpr size_t kRotateFileCount = 100;
 
 std::shared_ptr<spdlog::logger> createLogger(std::string& outPath) {
   const std::vector<std::string> candidates = {
-      "/var/log/owt-ctrl/owt-ctrl.log",
-      "logs/owt-ctrl.log",
+      "/var/log/owt-net/owt-net.log",
+      "logs/owt-net.log",
   };
 
   std::string lastError = "no log path candidates";
@@ -30,7 +30,7 @@ std::shared_ptr<spdlog::logger> createLogger(std::string& outPath) {
         std::filesystem::create_directories(parent);
       }
       outPath = path.string();
-      return spdlog::rotating_logger_mt("owt_ctrl", outPath, kRotateFileSize, kRotateFileCount);
+      return spdlog::rotating_logger_mt("owt_net", outPath, kRotateFileSize, kRotateFileCount);
     } catch (const std::exception& e) {
       lastError = e.what();
     }

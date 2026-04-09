@@ -36,7 +36,7 @@ public:
   void do_accept(http::request<Body, http::basic_fields<Allocator>> req) {
     ws_.set_option(websocket::stream_base::timeout::suggested(beast::role_type::server));
     ws_.set_option(websocket::stream_base::decorator([](websocket::response_type& res) {
-      res.set(http::field::server, std::string(BOOST_BEAST_VERSION_STRING) + " owt-ctrl");
+      res.set(http::field::server, std::string(BOOST_BEAST_VERSION_STRING) + " owt-net");
     }));
 
     ws_.async_accept(

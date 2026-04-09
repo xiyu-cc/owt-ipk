@@ -14,7 +14,7 @@ namespace service {
 
 namespace {
 
-constexpr const char* kSystemParamsPath = "/etc/owt-ctrl/params.ini";
+constexpr const char* kSystemParamsPath = "/etc/owt-net/params.ini";
 constexpr const char* kLocalParamsPath = "params.ini";
 
 std::mutex g_params_mutex;
@@ -56,7 +56,7 @@ std::string choose_read_path() {
 }
 
 std::string choose_write_path() {
-  if (::access("/etc/owt-ctrl", W_OK) == 0) {
+  if (::access("/etc/owt-net", W_OK) == 0) {
     return kSystemParamsPath;
   }
   return kLocalParamsPath;

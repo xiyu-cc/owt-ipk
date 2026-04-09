@@ -11,7 +11,7 @@
 
 int main(int argc, char* argv[]) {
   log::init();
-  log::info("owt-ctrl start");
+  log::info("owt-net start");
 
   std::string configPath = "config.ini";
   if (argc > 1 && argv[1] != nullptr && argv[1][0] != '\0') {
@@ -48,7 +48,7 @@ int main(int argc, char* argv[]) {
   grpc_server.stop();
   service::shutdown_command_store();
 
-  log::info("owt-ctrl exit");
+  log::info("owt-net exit");
   log::shutdown();
   return EXIT_SUCCESS;
 }

@@ -1,0 +1,15 @@
+[Unit]
+Description=owt-net control plane service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/owt-net
+ExecStart=/usr/local/bin/owt-net /etc/owt-net/config.ini
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

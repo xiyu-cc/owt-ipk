@@ -1,9 +1,9 @@
-# owt-ctrl 云控架构方案（VPS Control Plane + Gateway Agent）
+# owt-net 云控架构方案（Ubuntu Control Plane + Gateway Agent）
 
 ## 1. 背景与目标
 
-当前 `owt-ctrl` 运行在本地网关，以本地 HTTP API 直接执行 WOL/SSH/探测任务。  
-目标是迁移为：
+当前架构已拆分为 `owt-net`（Ubuntu 控制面）+ `owt-agent`（OpenWrt 执行面）。  
+目标是：
 
 - 公网用户访问 VPS 页面完成控制。
 - 本地网关仅主动出站连接 VPS，不暴露入站端口。
@@ -19,7 +19,7 @@
 
 ## 3. 角色与职责
 
-### 3.1 `owt-ctrl`（VPS，控制面）
+### 3.1 `owt-net`（Ubuntu，控制面）
 
 - 外部访问控制（当前迭代不引入账号体系，采用单管理令牌）。
 - 设备与 Agent 注册信息管理。
@@ -27,14 +27,14 @@
 - 审计日志与操作追踪。
 - Web/API 对外提供统一控制入口。
 
-`owt-ctrl` 不负责：
+`owt-net` 不负责：
 
 - SSH/WOL 的具体执行逻辑。
 - 局域网探测细节与命令拼装细节。
 
 ### 3.2 `owt-agent`（网关，执行面）
 
-- 主动连接 `owt-ctrl` 并保持长连接。
+- 主动连接 `owt-net` 并保持长连接。
 - 接收任务并执行本地动作（WOL/SSH/probe/参数管理）。
 - 上报执行状态与结果。
 - 本地能力声明（capabilities）与版本上报。
@@ -51,7 +51,7 @@
     |
     | HTTPS
     v
-[owt-ctrl / VPS]
+[owt-net / Ubuntu]
     |  (Access Control, API, Scheduler, Audit, Task Store)
     |
     | WSS(JSON, primary) + gRPC(TLS, experimental)
@@ -151,8 +151,8 @@
 
 - 本文档评审通过。
 - 形成规范协议：统一字段语义 + JSON 映射 + proto 映射。
-- 协议草案文档落地：`docs/phase0-command-protocol.md`。
-- proto 草案文件落地：`proto/control_channel.proto`。
+- 协议草案文档落地：`phase0-command-protocol.md`。
+- proto 草案文件落地：`../owt-net/proto/control_channel.proto`。
 
 ### Phase 1：生产主线（WSS）落地
 

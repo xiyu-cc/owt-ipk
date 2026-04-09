@@ -28,10 +28,10 @@ define Build/Prepare
 	$(CP) ../../proto $(PKG_BUILD_DIR)/
 	$(CP) ../../params.ini $(PKG_BUILD_DIR)/
 	mkdir -p $(PKG_BUILD_DIR)/third_party/spdlog
-	$(CP) ../../../owt-ctrl/third_party/boost $(PKG_BUILD_DIR)/third_party/
-	$(CP) ../../../owt-ctrl/third_party/spdlog/include $(PKG_BUILD_DIR)/third_party/spdlog/
-	$(CP) ../../../owt-ctrl/third_party/nlohmann $(PKG_BUILD_DIR)/third_party/
-	$(CP) ../../../owt-ctrl/third_party/sqlite3 $(PKG_BUILD_DIR)/third_party/
+	$(CP) ../../../owt-net/third_party/boost $(PKG_BUILD_DIR)/third_party/
+	$(CP) ../../../owt-net/third_party/spdlog/include $(PKG_BUILD_DIR)/third_party/spdlog/
+	$(CP) ../../../owt-net/third_party/nlohmann $(PKG_BUILD_DIR)/third_party/
+	$(CP) ../../../owt-net/third_party/sqlite3 $(PKG_BUILD_DIR)/third_party/
 endef
 
 define Build/Compile
