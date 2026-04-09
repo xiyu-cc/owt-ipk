@@ -1,0 +1,26 @@
+owt-agent for OpenWrt
+=====================
+
+This package installs the `owt-agent` gateway execution daemon.
+
+Installed files:
+- `/usr/sbin/owt-agent`
+- `/etc/init.d/owt-agent`
+- `/etc/config/owt-agent` (service options)
+- `/etc/owt-agent/config.ini` (agent connection config)
+- `/etc/owt-agent/params.ini` (execution default parameters)
+- `/var/log/owt-agent/owt-agent.log` (runtime log file, fallback: working dir `logs/`)
+
+Quick start:
+1. Enable and start:
+   `/etc/init.d/owt-agent enable`
+   `/etc/init.d/owt-agent start`
+2. Check service:
+   `logread -e owt-agent`
+3. Verify process:
+   `ps | grep owt-agent`
+
+UCI service options (`/etc/config/owt-agent`):
+- `enabled`: `1` or `0`
+- `config_file`: runtime config path
+- `respawn_threshold`, `respawn_timeout`, `respawn_retry`

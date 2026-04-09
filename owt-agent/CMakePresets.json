@@ -1,0 +1,132 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 16,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "gcc-debug",
+      "displayName": "GCC (Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/gcc-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_CXX_EXTENSIONS": "OFF",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "CMAKE_SKIP_RPATH": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_VISIBILITY_PRESET": "hidden",
+        "CMAKE_CXX_VISIBILITY_PRESET": "hidden",
+        "CMAKE_VISIBILITY_INLINES_HIDDEN": "YES",
+        "CMAKE_CXX_FLAGS": "-Wno-deprecated",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_MODULE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL"
+      }
+    },
+    {
+      "name": "gcc-release",
+      "displayName": "GCC (Release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/gcc-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "gcc",
+        "CMAKE_CXX_COMPILER": "g++",
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_CXX_EXTENSIONS": "OFF",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "CMAKE_SKIP_RPATH": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_VISIBILITY_PRESET": "hidden",
+        "CMAKE_CXX_VISIBILITY_PRESET": "hidden",
+        "CMAKE_VISIBILITY_INLINES_HIDDEN": "YES",
+        "CMAKE_CXX_FLAGS": "-Wno-deprecated",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_MODULE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL"
+      }
+    },
+    {
+      "name": "clang-libcxx-debug",
+      "displayName": "Clang + libc++ (Debug)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clang-libcxx-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_CXX_EXTENSIONS": "OFF",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "CMAKE_SKIP_RPATH": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_VISIBILITY_PRESET": "hidden",
+        "CMAKE_CXX_VISIBILITY_PRESET": "hidden",
+        "CMAKE_VISIBILITY_INLINES_HIDDEN": "YES",
+        "CMAKE_CXX_FLAGS": "-Wno-deprecated -stdlib=libc++",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_MODULE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL"
+      }
+    },
+    {
+      "name": "clang-libcxx-release",
+      "displayName": "Clang + libc++ (Release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/clang-libcxx-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang",
+        "CMAKE_CXX_COMPILER": "clang++",
+        "CMAKE_CXX_STANDARD": "17",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "CMAKE_CXX_EXTENSIONS": "OFF",
+        "CMAKE_POSITION_INDEPENDENT_CODE": "ON",
+        "CMAKE_SKIP_RPATH": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_VISIBILITY_PRESET": "hidden",
+        "CMAKE_CXX_VISIBILITY_PRESET": "hidden",
+        "CMAKE_VISIBILITY_INLINES_HIDDEN": "YES",
+        "CMAKE_CXX_FLAGS": "-Wno-deprecated -stdlib=libc++",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,--exclude-libs,ALL",
+        "CMAKE_MODULE_LINKER_FLAGS": "-Wl,--exclude-libs,ALL"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "gcc-debug",
+      "configurePreset": "gcc-debug",
+      "jobs": 16
+    },
+    {
+      "name": "gcc-release",
+      "configurePreset": "gcc-release",
+      "jobs": 16
+    },
+    {
+      "name": "clang-libcxx-debug",
+      "configurePreset": "clang-libcxx-debug",
+      "jobs": 16
+    },
+    {
+      "name": "clang-libcxx-release",
+      "configurePreset": "clang-libcxx-release",
+      "jobs": 16
+    }
+  ]
+}

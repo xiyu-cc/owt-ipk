@@ -8,6 +8,8 @@ struct ServerConfig {
   std::string host = "0.0.0.0";
   int port = 9527;
   int threads = 4;
+  bool enable_grpc = true;
+  std::string grpc_endpoint = "0.0.0.0:50051";
 };
 
 struct Config {

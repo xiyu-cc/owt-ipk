@@ -34,29 +34,40 @@ define Build/Prepare
 	$(CP) ../../third_party/boost $(PKG_BUILD_DIR)/third_party/
 	$(CP) ../../third_party/spdlog/include $(PKG_BUILD_DIR)/third_party/spdlog/
 	$(CP) ../../third_party/nlohmann $(PKG_BUILD_DIR)/third_party/
+	$(CP) ../../third_party/sqlite3 $(PKG_BUILD_DIR)/third_party/
 endef
 
 define Build/Compile
-	$(TARGET_CXX) $(TARGET_CXXFLAGS) $(TARGET_CPPFLAGS) -std=gnu++17 -Wall -Wextra -DBOOST_ERROR_CODE_HEADER_ONLY -DOWT_CTRL_ENABLE_LIBSSH2=1 \
+	$(TARGET_CXX) $(TARGET_CXXFLAGS) $(TARGET_CPPFLAGS) -std=gnu++17 -Wall -Wextra -DBOOST_ERROR_CODE_HEADER_ONLY -DOWT_CTRL_ENABLE_LIBSSH2=1 -DOWT_CTRL_ENABLE_GRPC_TRANSPORT=0 \
 		-I$(PKG_BUILD_DIR)/include \
 		-I$(PKG_BUILD_DIR)/third_party/boost \
 		-I$(PKG_BUILD_DIR)/third_party/spdlog/include \
 		-I$(PKG_BUILD_DIR)/third_party \
+		-I$(PKG_BUILD_DIR)/third_party/sqlite3 \
 		-I$(STAGING_DIR)/usr/include \
 		-o $(PKG_BUILD_DIR)/owt-ctrl \
 				$(PKG_BUILD_DIR)/src/core/main.cpp \
 				$(PKG_BUILD_DIR)/src/core/log.cpp \
 				$(PKG_BUILD_DIR)/src/core/config.cpp \
 				$(PKG_BUILD_DIR)/src/core/utils.cpp \
+				$(PKG_BUILD_DIR)/src/core/command_store.cpp \
+				$(PKG_BUILD_DIR)/src/core/control_hub.cpp \
+				$(PKG_BUILD_DIR)/src/core/grpc_control_server.cpp \
 				$(PKG_BUILD_DIR)/src/core/host_probe_agent.cpp \
 				$(PKG_BUILD_DIR)/src/core/params_store.cpp \
 				$(PKG_BUILD_DIR)/src/core/wakeonlan_sender.cpp \
 				$(PKG_BUILD_DIR)/src/core/ssh_executor.cpp \
+				$(PKG_BUILD_DIR)/src/core/control/control_protocol.cpp \
+				$(PKG_BUILD_DIR)/src/core/control/control_json_codec.cpp \
+				$(PKG_BUILD_DIR)/src/core/control/grpc_codec.cpp \
 				$(PKG_BUILD_DIR)/src/api/wol_wake_api.cpp \
 				$(PKG_BUILD_DIR)/src/api/host_control_api.cpp \
 				$(PKG_BUILD_DIR)/src/api/host_probe_api.cpp \
 				$(PKG_BUILD_DIR)/src/api/monitoring_api.cpp \
 				$(PKG_BUILD_DIR)/src/api/params_api.cpp \
+				$(PKG_BUILD_DIR)/src/api/control_command_get_api.cpp \
+				$(PKG_BUILD_DIR)/src/api/control_command_push_api.cpp \
+				$(PKG_BUILD_DIR)/third_party/sqlite3/sqlite3.c \
 				$(TARGET_LDFLAGS) -pthread -lssh2
 endef
 

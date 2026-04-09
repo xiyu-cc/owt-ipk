@@ -4,7 +4,7 @@
 #include <cctype>
 #include <fstream>
 
-namespace owt_ctrl {
+namespace owt_agent {
 
 namespace {
 
@@ -20,20 +20,6 @@ std::string toLower(std::string s) {
     return static_cast<char>(std::tolower(c));
   });
   return s;
-}
-
-bool parseInt(const std::string& s, int& out) {
-  try {
-    size_t idx = 0;
-    const int value = std::stoi(s, &idx);
-    if (idx != s.size()) {
-      return false;
-    }
-    out = value;
-    return true;
-  } catch (...) {
-    return false;
-  }
 }
 
 bool parseBool(const std::string& s, bool& out) {
@@ -80,22 +66,30 @@ Config loadConfig(const std::string& path) {
     const std::string key = toLower(trim(line.substr(0, eq)));
     const std::string value = trim(line.substr(eq + 1));
 
-    if (section == "server") {
-      if (key == "host") {
-        cfg.server.host = value;
-      } else if (key == "port") {
-        parseInt(value, cfg.server.port);
-      } else if (key == "threads") {
-        parseInt(value, cfg.server.threads);
+    if (section == "agent") {
+      if (key == "agent_id") {
+        cfg.agent.agent_id = value;
+      } else if (key == "protocol_version") {
+        cfg.agent.protocol_version = value;
+      } else if (key == "management_token") {
+        cfg.agent.management_token = value;
+      } else if (key == "enable_wss") {
+        parseBool(value, cfg.agent.enable_wss);
+      } else if (key == "wss_endpoint") {
+        cfg.agent.wss_endpoint = value;
       } else if (key == "enable_grpc") {
-        parseBool(value, cfg.server.enable_grpc);
+        parseBool(value, cfg.agent.enable_grpc);
       } else if (key == "grpc_endpoint") {
-        cfg.server.grpc_endpoint = value;
+        cfg.agent.grpc_endpoint = value;
+      } else if (key == "primary_channel") {
+        cfg.agent.primary_channel = toLower(value);
       }
+      continue;
     }
+
   }
 
   return cfg;
 }
 
-} // namespace owt_ctrl
+} // namespace owt_agent
