@@ -1,0 +1,11 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "remove" ] || [ "$1" = "deconfigure" ]; then
+    systemctl stop oauth2-proxy >/dev/null 2>&1 || true
+    systemctl disable oauth2-proxy >/dev/null 2>&1 || true
+    systemctl stop owt-net >/dev/null 2>&1 || true
+    systemctl disable owt-net >/dev/null 2>&1 || true
+fi
+
+exit 0

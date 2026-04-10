@@ -1,0 +1,3 @@
+/etc/owt-net/config.ini
+/etc/owt-net/oauth2-proxy.cfg
+/etc/nginx/sites-available/owt-net.conf

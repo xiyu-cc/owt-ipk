@@ -2,7 +2,6 @@
 
 #include <mutex>
 
-#if defined(OWT_CTRL_ENABLE_LIBSSH2) && OWT_CTRL_ENABLE_LIBSSH2
 #include <libssh2.h>
 
 #include <arpa/inet.h>
@@ -59,7 +58,6 @@ int connect_tcp(const std::string& host, int port, std::string& err) {
 }
 
 } // namespace
-#endif
 
 namespace service {
 
@@ -75,10 +73,6 @@ ssh_result run_ssh_command(const ssh_request& req) {
     return result;
   }
 
-#if !defined(OWT_CTRL_ENABLE_LIBSSH2) || !OWT_CTRL_ENABLE_LIBSSH2
-  result.error = "libssh2 is not enabled in this build";
-  return result;
-#else
   static std::once_flag init_once;
   static int init_rc = 0;
   std::call_once(init_once, []() { init_rc = libssh2_init(0); });
@@ -173,7 +167,6 @@ ssh_result run_ssh_command(const ssh_request& req) {
   close(sock);
 
   return result;
-#endif
 }
 
 } // namespace service

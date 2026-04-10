@@ -22,19 +22,6 @@ std::string toLower(std::string s) {
   return s;
 }
 
-bool parseBool(const std::string& s, bool& out) {
-  const auto value = toLower(trim(s));
-  if (value == "1" || value == "true" || value == "yes" || value == "on") {
-    out = true;
-    return true;
-  }
-  if (value == "0" || value == "false" || value == "no" || value == "off") {
-    out = false;
-    return true;
-  }
-  return false;
-}
-
 } // namespace
 
 Config loadConfig(const std::string& path) {
@@ -71,18 +58,8 @@ Config loadConfig(const std::string& path) {
         cfg.agent.agent_id = value;
       } else if (key == "protocol_version") {
         cfg.agent.protocol_version = value;
-      } else if (key == "management_token") {
-        cfg.agent.management_token = value;
-      } else if (key == "enable_wss") {
-        parseBool(value, cfg.agent.enable_wss);
       } else if (key == "wss_endpoint") {
         cfg.agent.wss_endpoint = value;
-      } else if (key == "enable_grpc") {
-        parseBool(value, cfg.agent.enable_grpc);
-      } else if (key == "grpc_endpoint") {
-        cfg.agent.grpc_endpoint = value;
-      } else if (key == "primary_channel") {
-        cfg.agent.primary_channel = toLower(value);
       }
       continue;
     }

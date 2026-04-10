@@ -6,8 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/owt-net
-ExecStart=/usr/local/bin/owt-net /etc/owt-net/config.ini
+StateDirectory=owt-net
+WorkingDirectory=/var/lib/owt-net
+ExecStart=/usr/sbin/owt-net /etc/owt-net/config.ini
 Restart=always
 RestartSec=3
 

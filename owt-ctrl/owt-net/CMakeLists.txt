@@ -1,16 +1,17 @@
 cmake_minimum_required(VERSION 3.20)
-project(owt_net LANGUAGES C CXX)
+project(owt_net VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+include(GNUInstallDirs)
+
+set(OWT_OAUTH2_PROXY_BINARY "" CACHE FILEPATH "Path to oauth2-proxy binary to bundle into the deb package")
+
+enable_testing()
+
 find_package(Threads REQUIRED)
-find_package(PkgConfig QUIET)
-find_path(LIBSSH2_INCLUDE_DIR libssh2.h)
-find_library(LIBSSH2_LIBRARY NAMES ssh2 libssh2)
-find_package(Protobuf QUIET)
-find_program(GRPC_CPP_PLUGIN_EXECUTABLE grpc_cpp_plugin)
 
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
@@ -21,110 +22,32 @@ add_subdirectory(third_party/spdlog EXCLUDE_FROM_ALL)
 add_subdirectory(third_party/nlohmann EXCLUDE_FROM_ALL)
 
 set(OWT_NET_TARGET owt_net)
-set(OWT_CTRL_ENABLE_GRPC_TRANSPORT 0)
-set(OWT_CTRL_GRPC_LINK_LIBS)
-set(OWT_CTRL_GRPC_INCLUDE_DIRS)
-set(OWT_CTRL_PROTO_GENERATED_SOURCES)
-set(OWT_CTRL_PROTO_GENERATED_HEADERS)
-
-if (NOT Protobuf_PROTOC_EXECUTABLE)
-  find_program(Protobuf_PROTOC_EXECUTABLE protoc)
-endif()
-
-if (PKG_CONFIG_FOUND)
-  pkg_check_modules(GRPCPP QUIET grpc++)
-endif()
-
-find_path(GRPCPP_INCLUDE_DIR grpcpp/grpcpp.h)
-find_library(GRPCPP_LIBRARY NAMES grpc++)
-find_library(GRPC_LIBRARY NAMES grpc)
-find_library(GPR_LIBRARY NAMES gpr)
-
-set(_OWT_CTRL_GRPC_DEPS_READY FALSE)
-if (Protobuf_PROTOC_EXECUTABLE AND GRPC_CPP_PLUGIN_EXECUTABLE AND (GRPCPP_FOUND OR (GRPCPP_INCLUDE_DIR AND GRPCPP_LIBRARY)))
-  set(_OWT_CTRL_GRPC_DEPS_READY TRUE)
-endif()
-
-if (_OWT_CTRL_GRPC_DEPS_READY)
-  set(OWT_CTRL_ENABLE_GRPC_TRANSPORT 1)
-  set(OWT_CTRL_PROTO_FILE ${CMAKE_CURRENT_SOURCE_DIR}/proto/control_channel.proto)
-  set(OWT_CTRL_PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/proto)
-  set(OWT_CTRL_PROTO_GENERATED_SOURCES
-    ${OWT_CTRL_PROTO_GEN_DIR}/control_channel.pb.cc
-    ${OWT_CTRL_PROTO_GEN_DIR}/control_channel.grpc.pb.cc
-  )
-  set(OWT_CTRL_PROTO_GENERATED_HEADERS
-    ${OWT_CTRL_PROTO_GEN_DIR}/control_channel.pb.h
-    ${OWT_CTRL_PROTO_GEN_DIR}/control_channel.grpc.pb.h
-  )
-
-  add_custom_command(
-    OUTPUT ${OWT_CTRL_PROTO_GENERATED_SOURCES} ${OWT_CTRL_PROTO_GENERATED_HEADERS}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${OWT_CTRL_PROTO_GEN_DIR}
-    COMMAND
-      ${Protobuf_PROTOC_EXECUTABLE}
-      -I ${CMAKE_CURRENT_SOURCE_DIR}/proto
-      --cpp_out=${OWT_CTRL_PROTO_GEN_DIR}
-      --grpc_out=${OWT_CTRL_PROTO_GEN_DIR}
-      --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN_EXECUTABLE}
-      ${OWT_CTRL_PROTO_FILE}
-    DEPENDS ${OWT_CTRL_PROTO_FILE}
-    VERBATIM
-  )
-
-  if (GRPCPP_FOUND)
-    list(APPEND OWT_CTRL_GRPC_LINK_LIBS ${GRPCPP_LIBRARIES})
-  else()
-    list(APPEND OWT_CTRL_GRPC_LINK_LIBS ${GRPCPP_LIBRARY} ${GRPC_LIBRARY} ${GPR_LIBRARY})
-  endif()
-
-  if (TARGET protobuf::libprotobuf)
-    list(APPEND OWT_CTRL_GRPC_LINK_LIBS protobuf::libprotobuf)
-  else()
-    find_library(PROTOBUF_LIBRARY NAMES protobuf)
-    if (PROTOBUF_LIBRARY)
-      list(APPEND OWT_CTRL_GRPC_LINK_LIBS ${PROTOBUF_LIBRARY})
-    endif()
-  endif()
-
-  if (GRPCPP_FOUND)
-    list(APPEND OWT_CTRL_GRPC_INCLUDE_DIRS ${GRPCPP_INCLUDE_DIRS})
-  else()
-    list(APPEND OWT_CTRL_GRPC_INCLUDE_DIRS ${GRPCPP_INCLUDE_DIR})
-  endif()
-  message(STATUS "gRPC transport enabled")
-else()
-  message(WARNING "gRPC transport disabled: missing protoc/grpc_cpp_plugin/grpc++ development files")
-endif()
 
 set(OWT_CTRL_SOURCES
   src/core/main.cpp
   src/core/log.cpp
   src/core/config.cpp
   src/core/utils.cpp
+  src/core/rate_limiter.cpp
+  src/core/observability.cpp
+  src/core/sensitive_json.cpp
+  src/core/command_retry_scheduler.cpp
+  src/core/websocket_session_observer_factory.cpp
+  src/core/control_ws_session_observer.cpp
+  src/core/frontend_status_ws_session_observer.cpp
+  src/core/frontend_status_stream.cpp
   src/core/control_hub.cpp
-  src/core/grpc_control_server.cpp
   src/core/command_store.cpp
-  src/core/host_probe_agent.cpp
-  src/core/params_store.cpp
-  src/core/wakeonlan_sender.cpp
-  src/core/ssh_executor.cpp
   src/core/control/control_protocol.cpp
   src/core/control/control_json_codec.cpp
-  src/core/control/grpc_codec.cpp
   third_party/sqlite3/sqlite3.c
-  src/api/wol_wake_api.cpp
-  src/api/host_control_api.cpp
-  src/api/host_probe_api.cpp
-  src/api/monitoring_api.cpp
-  src/api/params_api.cpp
+  src/api/control_agent_get_api.cpp
+  src/api/control_agents_get_api.cpp
+  src/api/control_audit_get_api.cpp
   src/api/control_command_get_api.cpp
   src/api/control_command_push_api.cpp
+  src/api/control_commands_get_api.cpp
 )
-
-if (OWT_CTRL_ENABLE_GRPC_TRANSPORT)
-  list(APPEND OWT_CTRL_SOURCES ${OWT_CTRL_PROTO_GENERATED_SOURCES})
-endif()
 
 add_executable(${OWT_NET_TARGET} ${OWT_CTRL_SOURCES})
 
@@ -135,31 +58,99 @@ target_include_directories(${OWT_NET_TARGET}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3
-    ${OWT_CTRL_GRPC_INCLUDE_DIRS}
 )
-
-if (OWT_CTRL_ENABLE_GRPC_TRANSPORT)
-  target_include_directories(${OWT_NET_TARGET} PRIVATE ${OWT_CTRL_PROTO_GEN_DIR})
-endif()
 
 target_compile_definitions(${OWT_NET_TARGET}
   PRIVATE
     BOOST_ERROR_CODE_HEADER_ONLY
-    OWT_CTRL_ENABLE_GRPC_TRANSPORT=$<BOOL:${OWT_CTRL_ENABLE_GRPC_TRANSPORT}>
 )
-
-if (LIBSSH2_INCLUDE_DIR AND LIBSSH2_LIBRARY)
-  target_compile_definitions(${OWT_NET_TARGET} PRIVATE OWT_CTRL_ENABLE_LIBSSH2=1)
-  target_include_directories(${OWT_NET_TARGET} PRIVATE ${LIBSSH2_INCLUDE_DIR})
-  target_link_libraries(${OWT_NET_TARGET} PRIVATE ${LIBSSH2_LIBRARY})
-else()
-  target_compile_definitions(${OWT_NET_TARGET} PRIVATE OWT_CTRL_ENABLE_LIBSSH2=0)
-endif()
 
 target_link_libraries(${OWT_NET_TARGET}
   PRIVATE
     spdlog::spdlog_header_only
     nlohmann_json::nlohmann_json
     Threads::Threads
-    ${OWT_CTRL_GRPC_LINK_LIBS}
 )
+
+set(OWT_NET_TEST_TARGET owt_net_tests)
+set(OWT_NET_TEST_SOURCES
+  tests/owt_net_tests.cpp
+  src/core/log.cpp
+  src/core/sensitive_json.cpp
+  src/core/command_store.cpp
+  src/core/control/control_protocol.cpp
+  third_party/sqlite3/sqlite3.c
+)
+
+add_executable(${OWT_NET_TEST_TARGET} ${OWT_NET_TEST_SOURCES})
+set_target_properties(${OWT_NET_TEST_TARGET} PROPERTIES OUTPUT_NAME "owt-net-tests")
+
+target_include_directories(${OWT_NET_TEST_TARGET}
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3
+)
+
+target_compile_definitions(${OWT_NET_TEST_TARGET}
+  PRIVATE
+    BOOST_ERROR_CODE_HEADER_ONLY
+)
+
+target_link_libraries(${OWT_NET_TEST_TARGET}
+  PRIVATE
+    spdlog::spdlog_header_only
+    nlohmann_json::nlohmann_json
+    Threads::Threads
+)
+
+add_test(NAME owt-net-tests COMMAND ${OWT_NET_TEST_TARGET})
+
+install(TARGETS ${OWT_NET_TARGET} RUNTIME DESTINATION ${CMAKE_INSTALL_SBINDIR})
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/config.ini DESTINATION /etc/owt-net)
+install(
+  FILES ${CMAKE_CURRENT_SOURCE_DIR}/deploy/nginx/oauth2-proxy-google.example.cfg
+  DESTINATION /etc/owt-net
+  RENAME oauth2-proxy.cfg
+)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/deploy/nginx/owt-net.conf DESTINATION /etc/nginx/sites-available)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/deploy/systemd/owt-net.service DESTINATION /lib/systemd/system)
+install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/deploy/systemd/oauth2-proxy.service DESTINATION /lib/systemd/system)
+if(OWT_OAUTH2_PROXY_BINARY)
+  if(EXISTS "${OWT_OAUTH2_PROXY_BINARY}")
+    install(PROGRAMS "${OWT_OAUTH2_PROXY_BINARY}" DESTINATION /usr/local/bin RENAME oauth2-proxy)
+  else()
+    message(FATAL_ERROR "OWT_OAUTH2_PROXY_BINARY does not exist: ${OWT_OAUTH2_PROXY_BINARY}")
+  endif()
+else()
+  message(WARNING "OWT_OAUTH2_PROXY_BINARY is empty. deb package will not include oauth2-proxy binary.")
+endif()
+install(
+  FILES ${CMAKE_CURRENT_SOURCE_DIR}/../docs/build-and-release.md
+  DESTINATION ${CMAKE_INSTALL_DOCDIR}/owt-net
+  RENAME README.md
+)
+
+set(OWT_NET_FRONTEND_DIST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/frontend/dist")
+if(EXISTS "${OWT_NET_FRONTEND_DIST_DIR}/index.html")
+  install(DIRECTORY "${OWT_NET_FRONTEND_DIST_DIR}/" DESTINATION /var/www/owt)
+else()
+  message(WARNING "frontend dist is missing: ${OWT_NET_FRONTEND_DIST_DIR}. Run: cd frontend && npm install && npm run build")
+endif()
+
+set(CPACK_GENERATOR "DEB")
+set(CPACK_PACKAGE_NAME "owt-net")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_CONTACT "owt-ipk")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "owt-net control plane service")
+set(CPACK_PACKAGING_INSTALL_PREFIX "/")
+set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "owt-ipk")
+set(CPACK_DEBIAN_PACKAGE_SECTION "net")
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "systemd, nginx")
+set(CPACK_OUTPUT_FILE_PREFIX "${CMAKE_BINARY_DIR}")
+set(CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA
+    "${CMAKE_CURRENT_SOURCE_DIR}/deploy/deb/postinst;${CMAKE_CURRENT_SOURCE_DIR}/deploy/deb/prerm;${CMAKE_CURRENT_SOURCE_DIR}/deploy/deb/postrm;${CMAKE_CURRENT_SOURCE_DIR}/deploy/deb/conffiles")
+
+include(CPack)

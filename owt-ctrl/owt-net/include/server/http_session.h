@@ -1,10 +1,14 @@
 #pragma once
 #include "websocket_session.h"
+#include "websocket_session_observer_factory.h"
 #include "http_deal/http_request_handler.h"
 #include "log.h"
+#include "service/auth.h"
+#include "utils.h"
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/asio/dispatch.hpp>
+#include <nlohmann/json.hpp>
 #include <boost/optional.hpp>
 #include <chrono>
 #include <memory>
@@ -104,10 +108,37 @@ private:
         // See if it is a WebSocket Upgrade
         if(websocket::is_upgrade(parser_->get()))
         {
+            auto req = parser_->release();
+            const auto ws_path = utils::url_path(std::string(req.target()));
+            const bool requires_google_identity = ws_path != "/ws/control";
+            if (requires_google_identity && !service::is_http_request_authorized(req)) {
+                nlohmann::json body = {
+                    {"ok", false},
+                    {"code", 401},
+                    {"message", "unauthorized: missing trusted Google identity headers"},
+                };
+                queue_write(http_deal::response::message(req, http::status::unauthorized, body));
+                if (response_queue_.size() < queue_limit)
+                    do_read();
+                return;
+            }
+            auto ws_observer = create_websocket_session_observer(ws_path);
+            if (!ws_observer) {
+                nlohmann::json body = {
+                    {"ok", false},
+                    {"code", 404},
+                    {"message", "websocket endpoint not found"},
+                };
+                queue_write(http_deal::response::message(req, http::status::not_found, body));
+                if (response_queue_.size() < queue_limit)
+                    do_read();
+                return;
+            }
             // Create a websocket session, transferring ownership
             // of both the socket and the HTTP request.
             std::make_shared<websocket_session>(
-                stream_.release_socket())->do_accept(parser_->release());
+                stream_.release_socket(),
+                std::move(ws_observer))->do_accept(std::move(req));
             return;
         }
 

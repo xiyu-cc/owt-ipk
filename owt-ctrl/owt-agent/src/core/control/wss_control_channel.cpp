@@ -5,18 +5,18 @@
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/ssl.hpp>
 #include <boost/beast/core.hpp>
+#include <boost/beast/http.hpp>
+#include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket.hpp>
 
-#if OWT_CTRL_ENABLE_WSS_TLS
-#include <boost/asio/ssl.hpp>
-#include <boost/beast/ssl.hpp>
 #include <boost/beast/websocket/ssl.hpp>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
-#endif
 
 #include <chrono>
+#include <exception>
 #include <string>
 #include <thread>
 #include <utility>
@@ -28,12 +28,11 @@ namespace {
 
 namespace asio = boost::asio;
 namespace beast = boost::beast;
+namespace http = beast::http;
 namespace websocket = beast::websocket;
 using tcp = asio::ip::tcp;
 
-#if OWT_CTRL_ENABLE_WSS_TLS
 namespace ssl = asio::ssl;
-#endif
 
 constexpr std::size_t kMaxOutgoingQueue = 2048;
 constexpr auto kReconnectDelay = std::chrono::seconds(2);
@@ -54,6 +53,10 @@ bool parse_endpoint(const std::string& endpoint, endpoint_parts& out, std::strin
   }
 
   out.scheme = endpoint.substr(0, scheme_pos);
+  if (out.scheme != "wss") {
+    err = "endpoint scheme must be wss";
+    return false;
+  }
   auto rest = endpoint.substr(scheme_pos + 3);
   if (rest.empty()) {
     err = "endpoint missing host";
@@ -62,7 +65,8 @@ bool parse_endpoint(const std::string& endpoint, endpoint_parts& out, std::strin
 
   auto target_pos = rest.find('/');
   auto authority = rest.substr(0, target_pos);
-  out.target = (target_pos == std::string::npos) ? "/" : rest.substr(target_pos);
+  // If target path is omitted, use control-channel default path.
+  out.target = (target_pos == std::string::npos) ? "/ws/control" : rest.substr(target_pos);
 
   if (authority.empty()) {
     err = "endpoint missing authority";
@@ -75,7 +79,7 @@ bool parse_endpoint(const std::string& endpoint, endpoint_parts& out, std::strin
     out.port = authority.substr(colon + 1);
   } else {
     out.host = authority;
-    out.port = (out.scheme == "wss") ? "443" : "80";
+    out.port = "443";
   }
 
   if (out.host.empty() || out.port.empty() || out.target.empty()) {
@@ -268,135 +272,79 @@ bool wss_control_channel::run_endpoint_session(const std::string& endpoint) {
   tcp::resolver resolver(ioc);
 
   std::size_t sent_count = 0;
-  if (ep.scheme == "ws") {
-    websocket::stream<beast::tcp_stream> ws(ioc);
-    beast::error_code ec;
-    const auto results = resolver.resolve(ep.host, ep.port, ec);
-    if (ec) {
-      invoke_error("resolve failed: " + ec.message());
-      return false;
-    }
-    beast::get_lowest_layer(ws).connect(results, ec);
-    if (ec) {
-      invoke_error("connect failed: " + ec.message());
-      return false;
-    }
-    ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
-    ws.handshake(ep.host, ep.target, ec);
-    if (ec) {
-      invoke_error("websocket handshake failed: " + ec.message());
-      return false;
-    }
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      connected_ = true;
-    }
-    invoke_connected();
-
-    while (true) {
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (!running_) {
-          break;
-        }
-        cv_.wait_for(
-            lock, kPollInterval, [this]() { return !running_ || !outgoing_messages_.empty(); });
-        if (!running_) {
-          break;
-        }
-      }
-
-      if (!flush_outgoing(ws, outgoing_messages_, mutex_, sent_count)) {
-        invoke_error("websocket write failed, reconnecting");
-        break;
-      }
-
-      channel_callbacks callbacks_copy;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        callbacks_copy = callbacks_;
-      }
-      if (!poll_receive(ws, callbacks_copy)) {
-        break;
-      }
-    }
-
-    ws.close(websocket::close_code::normal, ec);
-  } else if (ep.scheme == "wss") {
-#if OWT_CTRL_ENABLE_WSS_TLS
-    ssl::context ssl_ctx(ssl::context::tls_client);
-    ssl_ctx.set_verify_mode(ssl::verify_none);
-    websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(ioc, ssl_ctx);
-
-    beast::error_code ec;
-    const auto results = resolver.resolve(ep.host, ep.port, ec);
-    if (ec) {
-      invoke_error("resolve failed: " + ec.message());
-      return false;
-    }
-    beast::get_lowest_layer(ws).connect(results, ec);
-    if (ec) {
-      invoke_error("connect failed: " + ec.message());
-      return false;
-    }
-    if (!SSL_set_tlsext_host_name(ws.next_layer().native_handle(), ep.host.c_str())) {
-      invoke_error("sni setup failed: " + std::to_string(static_cast<unsigned long>(ERR_get_error())));
-      return false;
-    }
-    ws.next_layer().handshake(ssl::stream_base::client, ec);
-    if (ec) {
-      invoke_error("tls handshake failed: " + ec.message());
-      return false;
-    }
-    ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
-    ws.handshake(ep.host, ep.target, ec);
-    if (ec) {
-      invoke_error("websocket handshake failed: " + ec.message());
-      return false;
-    }
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      connected_ = true;
-    }
-    invoke_connected();
-
-    while (true) {
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        if (!running_) {
-          break;
-        }
-        cv_.wait_for(
-            lock, kPollInterval, [this]() { return !running_ || !outgoing_messages_.empty(); });
-        if (!running_) {
-          break;
-        }
-      }
-
-      if (!flush_outgoing(ws, outgoing_messages_, mutex_, sent_count)) {
-        invoke_error("websocket write failed, reconnecting");
-        break;
-      }
-
-      channel_callbacks callbacks_copy;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        callbacks_copy = callbacks_;
-      }
-      if (!poll_receive(ws, callbacks_copy)) {
-        break;
-      }
-    }
-
-    ws.close(websocket::close_code::normal, ec);
-#else
-    invoke_error("wss endpoint requested but binary is built without OpenSSL support");
-    return false;
-#endif
-  } else {
-    invoke_error("unsupported endpoint scheme: " + ep.scheme);
+  ssl::context ssl_ctx(ssl::context::tls_client);
+  try {
+    ssl_ctx.set_default_verify_paths();
+  } catch (const std::exception& ex) {
+    invoke_error(std::string("load trust store failed: ") + ex.what());
     return false;
   }
+  ssl_ctx.set_verify_mode(ssl::verify_peer);
+  websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(ioc, ssl_ctx);
+
+  beast::error_code ec;
+  const auto results = resolver.resolve(ep.host, ep.port, ec);
+  if (ec) {
+    invoke_error("resolve failed: " + ec.message());
+    return false;
+  }
+  beast::get_lowest_layer(ws).connect(results, ec);
+  if (ec) {
+    invoke_error("connect failed: " + ec.message());
+    return false;
+  }
+  if (!SSL_set_tlsext_host_name(ws.next_layer().native_handle(), ep.host.c_str())) {
+    invoke_error("sni setup failed: " + std::to_string(static_cast<unsigned long>(ERR_get_error())));
+    return false;
+  }
+  ws.next_layer().set_verify_mode(ssl::verify_peer);
+  ws.next_layer().set_verify_callback(ssl::host_name_verification(ep.host));
+  ws.next_layer().handshake(ssl::stream_base::client, ec);
+  if (ec) {
+    invoke_error("tls handshake failed: " + ec.message());
+    return false;
+  }
+  ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
+  ws.handshake(ep.host, ep.target, ec);
+  if (ec) {
+    invoke_error("websocket handshake failed: " + ec.message());
+    return false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    connected_ = true;
+  }
+  invoke_connected();
+
+  while (true) {
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (!running_) {
+        break;
+      }
+      cv_.wait_for(
+          lock, kPollInterval, [this]() { return !running_ || !outgoing_messages_.empty(); });
+      if (!running_) {
+        break;
+      }
+    }
+
+    if (!flush_outgoing(ws, outgoing_messages_, mutex_, sent_count)) {
+      invoke_error("websocket write failed, reconnecting");
+      break;
+    }
+
+    channel_callbacks callbacks_copy;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      callbacks_copy = callbacks_;
+    }
+    if (!poll_receive(ws, callbacks_copy)) {
+      break;
+    }
+  }
+
+  ws.close(websocket::close_code::normal, ec);
 
   {
     std::lock_guard<std::mutex> lock(mutex_);

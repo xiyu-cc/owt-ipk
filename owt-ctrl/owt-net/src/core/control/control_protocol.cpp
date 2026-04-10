@@ -8,30 +8,9 @@ namespace control {
 namespace {
 
 std::atomic<uint64_t> g_message_counter{0};
+constexpr const char* kCurrentProtocolVersion = "v1.0-draft";
 
 } // namespace
-
-std::string to_string(channel_type value) {
-  switch (value) {
-    case channel_type::wss:
-      return "wss";
-    case channel_type::grpc:
-      return "grpc";
-  }
-  return "unknown";
-}
-
-bool try_parse_channel_type(const std::string& text, channel_type& out) {
-  if (text == "wss") {
-    out = channel_type::wss;
-    return true;
-  }
-  if (text == "grpc") {
-    out = channel_type::grpc;
-    return true;
-  }
-  return false;
-}
 
 std::string to_string(message_type value) {
   switch (value) {
@@ -199,6 +178,14 @@ bool try_parse_command_status(const std::string& text, command_status& out) {
     return true;
   }
   return false;
+}
+
+const char* current_protocol_version() noexcept {
+  return kCurrentProtocolVersion;
+}
+
+bool is_supported_protocol_version(const std::string& version) noexcept {
+  return version == kCurrentProtocolVersion;
 }
 
 int64_t unix_time_ms_now() {

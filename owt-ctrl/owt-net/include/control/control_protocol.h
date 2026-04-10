@@ -7,11 +7,6 @@
 
 namespace control {
 
-enum class channel_type {
-  wss,
-  grpc,
-};
-
 enum class message_type {
   register_agent,
   register_ack,
@@ -44,14 +39,15 @@ enum class command_status {
   cancelled,
 };
 
-std::string to_string(channel_type value);
 std::string to_string(message_type value);
 std::string to_string(command_type value);
 std::string to_string(command_status value);
-bool try_parse_channel_type(const std::string& text, channel_type& out);
 bool try_parse_message_type(const std::string& text, message_type& out);
 bool try_parse_command_type(const std::string& text, command_type& out);
 bool try_parse_command_status(const std::string& text, command_status& out);
+
+const char* current_protocol_version() noexcept;
+bool is_supported_protocol_version(const std::string& version) noexcept;
 
 int64_t unix_time_ms_now();
 std::string make_message_id();
@@ -122,7 +118,6 @@ struct envelope {
   std::string message_id;
   message_type type = message_type::heartbeat;
   std::string protocol_version = "v1.0-draft";
-  channel_type channel = channel_type::wss;
   int64_t sent_at_ms = 0;
   std::string trace_id;
   std::string agent_id;

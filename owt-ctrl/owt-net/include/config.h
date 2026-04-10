@@ -5,11 +5,12 @@
 namespace owt_ctrl {
 
 struct ServerConfig {
-  std::string host = "0.0.0.0";
-  int port = 9527;
+  std::string host = "127.0.0.1";
+  int port = 9081;
   int threads = 4;
-  bool enable_grpc = true;
-  std::string grpc_endpoint = "0.0.0.0:50051";
+  bool enable_rate_limit = true;
+  int rate_limit_rps = 20;
+  int rate_limit_burst = 40;
 };
 
 struct Config {

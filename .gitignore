@@ -5,3 +5,10 @@ owt-ctrl/third_party/
 owt-ctrl/owt-net/third_party/
 owt-ctrl/owt-agent/build/
 owt-ctrl/owt-net/build/
+owt-ctrl/owt-agent/build-local/
+owt-ctrl/owt-net/build-local/
+owt-ctrl/owt-net/frontend/node_modules/
+owt-ctrl/owt-net/frontend/dist/
+deb-out
+ipk-out
+web-out

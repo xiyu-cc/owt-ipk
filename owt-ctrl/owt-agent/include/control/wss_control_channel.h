@@ -13,7 +13,6 @@ class wss_control_channel final : public i_control_channel {
 public:
   ~wss_control_channel() override;
 
-  channel_type type() const noexcept override { return channel_type::wss; }
   bool start(const channel_start_options& options, channel_callbacks callbacks) override;
   void stop() override;
   bool send(const envelope& message) override;

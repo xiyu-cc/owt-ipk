@@ -2,6 +2,7 @@
 
 #include "api/api_common.h"
 #include "service/command_store.h"
+#include "service/sensitive_json.h"
 #include "utils.h"
 
 #include <nlohmann/json.hpp>
@@ -20,9 +21,9 @@ nlohmann::json parse_json_or_string(const std::string& text) {
   }
   auto parsed = nlohmann::json::parse(text, nullptr, false);
   if (parsed.is_discarded()) {
-    return text;
+    return service::redact_sensitive_json_text(text);
   }
-  return parsed;
+  return service::redact_sensitive_json(parsed);
 }
 
 bool parse_limit_value(const std::string& text, int& value) {
@@ -53,11 +54,6 @@ http_deal::http::message_generator control_command_get_api::operator()(request_t
       !parse_limit_value(limit_it->second, event_limit)) {
     return reply_error(req, http_deal::http::status::bad_request, "event_limit must be positive integer");
   }
-  const auto legacy_limit_it = args.find("limit");
-  if (legacy_limit_it != args.end() && !legacy_limit_it->second.empty() &&
-      !parse_limit_value(legacy_limit_it->second, event_limit)) {
-    return reply_error(req, http_deal::http::status::bad_request, "limit must be positive integer");
-  }
 
   service::command_record command;
   std::string error;
@@ -83,7 +79,6 @@ http_deal::http::message_generator control_command_get_api::operator()(request_t
         {"command_id", event.command_id},
         {"event_type", event.event_type},
         {"status", event.status},
-        {"channel_type", event.channel_type},
         {"detail", parse_json_or_string(event.detail_json)},
         {"created_at_ms", event.created_at_ms},
     });
@@ -93,10 +88,10 @@ http_deal::http::message_generator control_command_get_api::operator()(request_t
       {"command",
        {
            {"command_id", command.command_id},
+           {"agent_id", command.agent_id},
            {"idempotency_key", command.idempotency_key},
            {"command_type", command.command_type},
            {"status", command.status},
-           {"channel_type", command.channel_type},
            {"payload", parse_json_or_string(command.payload_json)},
            {"result", parse_json_or_string(command.result_json)},
            {"created_at_ms", command.created_at_ms},

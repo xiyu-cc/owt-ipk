@@ -11,7 +11,6 @@ struct channel_start_options {
   std::string agent_id;
   std::string endpoint;
   std::string protocol_version = "v1.0-draft";
-  std::string auth_token;
 };
 
 struct channel_callbacks {
@@ -25,7 +24,6 @@ class i_control_channel {
 public:
   virtual ~i_control_channel() = default;
 
-  virtual channel_type type() const noexcept = 0;
   virtual bool start(const channel_start_options& options, channel_callbacks callbacks) = 0;
   virtual void stop() = 0;
   virtual bool send(const envelope& message) = 0;
@@ -33,4 +31,3 @@ public:
 };
 
 } // namespace control
-

@@ -87,10 +87,12 @@ Config loadConfig(const std::string& path) {
         parseInt(value, cfg.server.port);
       } else if (key == "threads") {
         parseInt(value, cfg.server.threads);
-      } else if (key == "enable_grpc") {
-        parseBool(value, cfg.server.enable_grpc);
-      } else if (key == "grpc_endpoint") {
-        cfg.server.grpc_endpoint = value;
+      } else if (key == "enable_rate_limit") {
+        parseBool(value, cfg.server.enable_rate_limit);
+      } else if (key == "rate_limit_rps") {
+        parseInt(value, cfg.server.rate_limit_rps);
+      } else if (key == "rate_limit_burst") {
+        parseInt(value, cfg.server.rate_limit_burst);
       }
     }
   }

@@ -37,18 +37,29 @@ bool command_from_json(const json& j, command& out) {
   if (!j.is_object()) {
     return false;
   }
-  out.command_id = get_or<std::string>(j, "command_id", "");
-  out.idempotency_key = get_or<std::string>(j, "idempotency_key", "");
-  out.issued_at_ms = get_or<int64_t>(j, "issued_at_ms", 0);
-  out.expires_at_ms = get_or<int64_t>(j, "expires_at_ms", 0);
-  out.timeout_ms = get_or<int>(j, "timeout_ms", 0);
-  out.max_retry = get_or<int>(j, "max_retry", 0);
-  out.payload_json = get_or<std::string>(j, "payload_json", "");
-  const auto type_text = get_or<std::string>(j, "command_type", "");
+  if (!j.contains("command_id") || !j["command_id"].is_string() ||
+      !j.contains("idempotency_key") || !j["idempotency_key"].is_string() ||
+      !j.contains("command_type") || !j["command_type"].is_string() ||
+      !j.contains("issued_at_ms") || !j["issued_at_ms"].is_number_integer() ||
+      !j.contains("expires_at_ms") || !j["expires_at_ms"].is_number_integer() ||
+      !j.contains("timeout_ms") || !j["timeout_ms"].is_number_integer() ||
+      !j.contains("max_retry") || !j["max_retry"].is_number_integer() ||
+      !j.contains("payload_json") || !j["payload_json"].is_string()) {
+    return false;
+  }
+
+  out.command_id = j["command_id"].get<std::string>();
+  out.idempotency_key = j["idempotency_key"].get<std::string>();
+  out.issued_at_ms = j["issued_at_ms"].get<int64_t>();
+  out.expires_at_ms = j["expires_at_ms"].get<int64_t>();
+  out.timeout_ms = j["timeout_ms"].get<int>();
+  out.max_retry = j["max_retry"].get<int>();
+  out.payload_json = j["payload_json"].get<std::string>();
+  const auto type_text = j["command_type"].get<std::string>();
   if (!try_parse_command_type(type_text, out.type)) {
     return false;
   }
-  return !out.command_id.empty();
+  return !out.command_id.empty() && !out.idempotency_key.empty();
 }
 
 json payload_to_json(message_type type, const payload_variant& payload) {
@@ -158,8 +169,12 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return p;
     }
     case message_type::command_push: {
+      if (!payload.is_object() || !payload.contains("command") || !payload["command"].is_object()) {
+        ok = false;
+        return std::monostate{};
+      }
       command c;
-      const auto command_json = payload.contains("command") ? payload["command"] : payload;
+      const auto& command_json = payload["command"];
       if (!command_from_json(command_json, c)) {
         ok = false;
         return std::monostate{};
@@ -171,8 +186,12 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       p.command_id = get_or<std::string>(payload, "command_id", "");
       p.message = get_or<std::string>(payload, "message", "");
       command_status status = command_status::acked;
-      const auto status_text = get_or<std::string>(payload, "status", "ACKED");
+      const auto status_text = get_or<std::string>(payload, "status", "");
       if (!try_parse_command_status(status_text, status)) {
+        ok = false;
+        return std::monostate{};
+      }
+      if (p.command_id.empty()) {
         ok = false;
         return std::monostate{};
       }
@@ -180,13 +199,21 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return p;
     }
     case message_type::command_result: {
+      if (!payload.contains("exit_code") || !payload["exit_code"].is_number_integer()) {
+        ok = false;
+        return std::monostate{};
+      }
       command_result_payload p;
       p.command_id = get_or<std::string>(payload, "command_id", "");
-      p.exit_code = get_or<int>(payload, "exit_code", 0);
+      p.exit_code = payload["exit_code"].get<int>();
       p.result_json = get_or<std::string>(payload, "result_json", "");
       command_status status = command_status::failed;
-      const auto status_text = get_or<std::string>(payload, "final_status", "FAILED");
+      const auto status_text = get_or<std::string>(payload, "final_status", "");
       if (!try_parse_command_status(status_text, status)) {
+        ok = false;
+        return std::monostate{};
+      }
+      if (p.command_id.empty()) {
         ok = false;
         return std::monostate{};
       }
@@ -211,7 +238,6 @@ std::string encode_envelope_json(const envelope& value) {
       {"message_id", value.message_id},
       {"message_type", to_string(value.type)},
       {"protocol_version", value.protocol_version},
-      {"channel_type", to_string(value.channel)},
       {"sent_at_ms", value.sent_at_ms},
       {"trace_id", value.trace_id},
       {"agent_id", value.agent_id},
@@ -233,27 +259,44 @@ bool decode_envelope_json(const std::string& text, envelope& out, std::string& e
     return false;
   }
 
-  out.message_id = get_or<std::string>(j, "message_id", "");
-  out.protocol_version = get_or<std::string>(j, "protocol_version", "v1.0-draft");
-  out.sent_at_ms = get_or<int64_t>(j, "sent_at_ms", unix_time_ms_now());
+  if (!j.contains("message_id") || !j["message_id"].is_string()) {
+    error = "message_id is required";
+    return false;
+  }
+  out.message_id = j["message_id"].get<std::string>();
+  if (out.message_id.empty()) {
+    error = "message_id is required";
+    return false;
+  }
+  if (!j.contains("protocol_version") || !j["protocol_version"].is_string()) {
+    error = "protocol_version is required";
+    return false;
+  }
+  out.protocol_version = j["protocol_version"].get<std::string>();
+  if (!j.contains("sent_at_ms") || !j["sent_at_ms"].is_number_integer()) {
+    error = "sent_at_ms is required";
+    return false;
+  }
+  out.sent_at_ms = j["sent_at_ms"].get<int64_t>();
   out.trace_id = get_or<std::string>(j, "trace_id", "");
   out.agent_id = get_or<std::string>(j, "agent_id", "");
 
-  const auto type_text = get_or<std::string>(j, "message_type", "");
+  if (!j.contains("message_type") || !j["message_type"].is_string()) {
+    error = "message_type is required";
+    return false;
+  }
+  const auto type_text = j["message_type"].get<std::string>();
   if (!try_parse_message_type(type_text, out.type)) {
     error = "invalid message_type";
     return false;
   }
 
-  const auto channel_text = get_or<std::string>(j, "channel_type", "wss");
-  if (!try_parse_channel_type(channel_text, out.channel)) {
-    error = "invalid channel_type";
+  bool payload_ok = true;
+  if (!j.contains("payload") || !j["payload"].is_object()) {
+    error = "payload is required";
     return false;
   }
-
-  bool payload_ok = true;
-  const auto payload_json = j.contains("payload") ? j["payload"] : json::object();
-  out.payload = payload_from_json(out.type, payload_json, payload_ok);
+  out.payload = payload_from_json(out.type, j["payload"], payload_ok);
   if (!payload_ok) {
     error = "invalid payload";
     return false;
@@ -262,4 +305,3 @@ bool decode_envelope_json(const std::string& text, envelope& out, std::string& e
 }
 
 } // namespace control
-
