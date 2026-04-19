@@ -28,7 +28,6 @@ public:
 
 class NullMetrics final : public IMetrics {
 public:
-  void record_http_request() override;
   void record_rate_limited(std::string_view actor_id, int64_t retry_after_ms) override;
   void record_command_push() override;
   void record_command_retry(

@@ -30,7 +30,7 @@ int RuntimeImpl::run() {
   }
 
   log::init();
-  log::info("owt-net start (v3 ws-only)");
+  log::info("owt-net start (v4 ws-only)");
   log::info(
       "server config: host={}, port={}, threads={}",
       state_->config.server.host,

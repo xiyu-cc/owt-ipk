@@ -2,6 +2,7 @@
 
 #include "control/control_json_codec.h"
 #include "log.h"
+#include "owt/protocol/v4/contract.h"
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -66,7 +67,9 @@ bool parse_endpoint(const std::string& endpoint, endpoint_parts& out, std::strin
   auto target_pos = rest.find('/');
   auto authority = rest.substr(0, target_pos);
   // If target path is omitted, use control-channel default path.
-  out.target = (target_pos == std::string::npos) ? "/ws/v3/agent" : rest.substr(target_pos);
+  out.target = (target_pos == std::string::npos)
+      ? std::string(owt::protocol::v4::kWsRouteAgent)
+      : rest.substr(target_pos);
 
   if (authority.empty()) {
     err = "endpoint missing authority";
@@ -226,12 +229,12 @@ bool wss_control_channel::send(const envelope& message) {
     }
     // Heartbeat is periodic telemetry and should not be buffered while offline.
     // Otherwise reconnect will burst stale heartbeats and break expected cadence.
-    if (message.type == message_type::heartbeat && !connected_) {
+    if (message.type == message_type::agent_heartbeat && !connected_) {
       log::warn("heartbeat dropped: channel not connected");
       return false;
     }
 
-    if (message.type == message_type::register_agent) {
+    if (message.type == message_type::agent_register) {
       // Ensure REGISTER is sent before any buffered payloads on a new connection.
       if (outgoing_messages_.size() >= kMaxOutgoingQueue) {
         outgoing_messages_.pop_back();

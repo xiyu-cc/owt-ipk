@@ -1,7 +1,7 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=owt-agent
-PKG_VERSION:=0.1.0
+PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
 
 PKG_MAINTAINER:=owt-ipk
@@ -41,6 +41,7 @@ define Build/Compile
 		-I$(PKG_BUILD_DIR)/third_party/boost \
 		-I$(PKG_BUILD_DIR)/third_party/spdlog/include \
 		-I$(PKG_BUILD_DIR)/third_party \
+		-I../../../owt-protocol/include \
 		-I$(STAGING_DIR)/usr/include \
 		-o $(PKG_BUILD_DIR)/owt-agent \
 				$(PKG_BUILD_DIR)/src/core/main.cpp \

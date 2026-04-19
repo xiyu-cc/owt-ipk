@@ -91,12 +91,12 @@ bool WsAgentChannel::send_command(
       ("trc-" + std::to_string(now_ms) + "-" + std::to_string(seq)) : cmd.trace_id;
 
   ws::AgentEnvelope envelope;
-  envelope.type = "command_push";
-  envelope.meta.version = std::string(kProtocolVersion);
+  envelope.type = std::string(owt::protocol::v4::agent::kTypeServerCommandDispatch);
+  envelope.meta.protocol = std::string(kProtocolVersion);
   envelope.meta.trace_id = trace_id;
   envelope.meta.ts_ms = now_ms;
   envelope.meta.agent_id = agent_id;
-  envelope.payload = {
+  envelope.data = {
       {"command",
        {
            {"command_id", cmd.command_id},

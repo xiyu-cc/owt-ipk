@@ -140,7 +140,7 @@ SubmitCommandOutput CommandOrchestrator::submit(const SubmitCommandInput& in) {
   }
 
   bool wait_timed_out = false;
-  auto waited = wait_for_http_result(spec.command_id, in.wait_timeout_ms, wait_timed_out);
+  auto waited = wait_for_command_result(spec.command_id, in.wait_timeout_ms, wait_timed_out);
   return to_submit_output(waited, wait_timed_out);
 }
 
@@ -190,7 +190,7 @@ SubmitCommandOutput CommandOrchestrator::to_submit_output(
   return out;
 }
 
-domain::CommandSnapshot CommandOrchestrator::wait_for_http_result(
+domain::CommandSnapshot CommandOrchestrator::wait_for_command_result(
     std::string_view command_id,
     int wait_timeout_ms,
     bool& wait_timed_out) const {

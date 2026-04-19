@@ -33,8 +33,6 @@ void NullStatusPublisher::publish_agent(std::string_view reason, std::string_vie
   (void)agent_mac;
 }
 
-void NullMetrics::record_http_request() {}
-
 void NullMetrics::record_rate_limited(std::string_view actor_id, int64_t retry_after_ms) {
   (void)actor_id;
   (void)retry_after_ms;

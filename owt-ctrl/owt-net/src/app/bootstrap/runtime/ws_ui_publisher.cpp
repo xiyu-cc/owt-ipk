@@ -33,7 +33,7 @@ void WsUiPublisher::push_snapshot_to_session(std::string_view session_id, std::s
   };
   send_notify(
       session_id,
-      "agent_snapshot",
+      owt::protocol::v4::ui::kEventAgentSnapshot,
       resource,
       nlohmann::json{{"reason", std::string(reason)}});
 }
@@ -58,7 +58,7 @@ void WsUiPublisher::push_agent_to_session(
   }
   send_notify(
       session_id,
-      "agent_status_update",
+      owt::protocol::v4::ui::kEventAgentUpdate,
       resource,
       nlohmann::json{{"reason", std::string(reason)}});
 }
@@ -97,9 +97,9 @@ void WsUiPublisher::publish_command_event(
     if (sub.scope == UiSubscriptionStore::Scope::All || sub.agent_mac == command.agent.mac) {
       send_notify(
           session_id,
-          "command_event",
+          owt::protocol::v4::ui::kEventCommandEvent,
           resource,
-          nlohmann::json{{"reason", "command_event"}});
+          nlohmann::json{{"reason", std::string(owt::protocol::v4::ui::kEventCommandEvent)}});
     }
   }
 }

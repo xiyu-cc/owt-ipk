@@ -1,8 +1,6 @@
 #include "app/ws/agent_protocol.h"
 #include "app/ws/jsonrpc_protocol.h"
 #include "ctrl/adapters/control_ws_use_cases.h"
-#include "ctrl/adapters/frontend_status_use_cases.h"
-#include "ctrl/adapters/http_use_cases.h"
 #include "ctrl/infrastructure/sqlite_store.h"
 #include "ctrl/domain/types.h"
 #include "ctrl/ports/interfaces.h"
@@ -14,6 +12,7 @@
 #include "ctrl/application/rate_limiter_service.h"
 #include "ctrl/application/redaction_service.h"
 #include "ctrl/application/retry_service.h"
+#include "owt/protocol/v4/contract.h"
 
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
@@ -557,9 +556,6 @@ public:
 
 class fake_metrics final : public ctrl::ports::IMetrics {
 public:
-  void record_http_request() override {
-    ++http_requests_total_;
-  }
   void record_rate_limited(std::string_view actor_id, int64_t retry_after_ms) override {
     (void)actor_id;
     (void)retry_after_ms;
@@ -599,7 +595,6 @@ public:
     }
   }
 
-  uint64_t http_requests_total_ = 0;
   uint64_t rate_limited_total_ = 0;
   uint64_t command_push_total_ = 0;
   uint64_t command_retry_total_ = 0;
@@ -899,14 +894,14 @@ void test_model_types_snake_case_mapping() {
       "legacy uppercase command state parsing should still succeed");
 }
 
-void test_agent_envelope_v3_codec() {
+void test_agent_envelope_v4_codec() {
   app::ws::AgentEnvelope envelope;
-  envelope.type = "heartbeat";
-  envelope.meta.version = "v3";
+  envelope.type = std::string(owt::protocol::v4::agent::kTypeAgentHeartbeat);
+  envelope.meta.protocol = std::string(owt::protocol::v4::kProtocol);
   envelope.meta.trace_id = "trc-1";
   envelope.meta.ts_ms = 123456;
   envelope.meta.agent_id = "agent-1";
-  envelope.payload = nlohmann::json{{"heartbeat_at_ms", 123450}, {"stats", nlohmann::json::object()}};
+  envelope.data = nlohmann::json{{"heartbeat_at_ms", 123450}, {"stats", nlohmann::json::object()}};
 
   const auto encoded = app::ws::encode_agent_envelope(envelope);
   app::ws::AgentEnvelope decoded;
@@ -914,20 +909,22 @@ void test_agent_envelope_v3_codec() {
   require(
       app::ws::parse_agent_envelope(encoded, decoded, error),
       std::string("agent envelope roundtrip should parse: ") + error);
-  require(decoded.type == "heartbeat", "decoded type mismatch");
-  require(decoded.meta.version == "v3", "decoded version mismatch");
+  require(
+      decoded.type == owt::protocol::v4::agent::kTypeAgentHeartbeat,
+      "decoded type mismatch");
+  require(decoded.meta.protocol == "v4", "decoded protocol mismatch");
   require(decoded.meta.trace_id == "trc-1", "decoded trace_id mismatch");
   require(decoded.meta.agent_id == "agent-1", "decoded agent_id mismatch");
-  require(decoded.payload["heartbeat_at_ms"].get<int64_t>() == 123450, "decoded payload mismatch");
+  require(decoded.data["heartbeat_at_ms"].get<int64_t>() == 123450, "decoded data mismatch");
 
   std::string invalid_error;
   app::ws::AgentEnvelope ignored;
   require(
-      !app::ws::parse_agent_envelope(R"({"type":"heartbeat","payload":{}})", ignored, invalid_error),
+      !app::ws::parse_agent_envelope(R"({"type":"heartbeat","data":{}})", ignored, invalid_error),
       "missing meta should fail");
   require(
       !app::ws::parse_agent_envelope(
-          R"({"type":"heartbeat","meta":{"version":"v3","trace_id":"t","ts_ms":1},"payload":{},"x":1})",
+          R"({"type":"heartbeat","meta":{"protocol":"v4","trace_id":"t","ts_ms":1},"data":{},"x":1})",
           ignored,
           invalid_error),
       "unknown envelope field should fail");
@@ -940,18 +937,18 @@ void test_jsonrpc_request_validation() {
 
   require(
       app::ws::parse_jsonrpc_request(
-          R"({"jsonrpc":"2.0","id":"1","method":"agent_list","params":{"include_offline":true}})",
+          R"({"jsonrpc":"2.0","id":"1","method":"agent.list","params":{"include_offline":true}})",
           req,
           error,
           error_code),
       std::string("valid jsonrpc request should parse: ") + error);
   require(!req.notification, "request with id should not be notification");
-  require(req.method == "agent_list", "method parse mismatch");
+  require(req.method == "agent.list", "method parse mismatch");
   require(req.params["include_offline"].get<bool>(), "params parse mismatch");
 
   require(
       !app::ws::parse_jsonrpc_request(
-          R"({"jsonrpc":"2.0","id":"1","method":"agent_list","extra":1})",
+          R"({"jsonrpc":"2.0","id":"1","method":"agent.list","extra":1})",
           req,
           error,
           error_code),
@@ -960,7 +957,7 @@ void test_jsonrpc_request_validation() {
 
   require(
       !app::ws::parse_jsonrpc_request(
-          R"({"jsonrpc":"2.0","id":"1","method":"agent_list","params":[1,2]})",
+          R"({"jsonrpc":"2.0","id":"1","method":"agent.list","params":[1,2]})",
           req,
           error,
           error_code),
@@ -989,42 +986,25 @@ void test_jsonrpc_request_validation() {
   require(error_json["error"]["data"].is_object(), "jsonrpc_error data should be object");
 }
 
-void test_ws_frontend_http_adapters() {
+void test_control_ws_use_cases_v4_contract() {
   test_clock clock;
   clock.set(5000);
-  test_id_generator id_generator;
   in_memory_command_repository command_repo;
   in_memory_agent_repository agent_repo;
-  in_memory_params_repository params_repo;
-  in_memory_audit_repository audit_repo;
-  fake_agent_channel channel;
   fake_status_publisher publisher;
   fake_metrics metrics;
 
-  ctrl::application::ParamsService params_service(params_repo, clock);
   ctrl::application::AgentRegistryService registry(agent_repo, clock);
-  ctrl::application::CommandOrchestrator orchestrator(
-      command_repo,
-      channel,
-      params_service,
-      audit_repo,
-      publisher,
-      metrics,
-      clock,
-      id_generator);
   ctrl::application::AgentMessageService message_service(
       command_repo,
       registry,
       publisher,
       metrics,
       clock);
-  ctrl::application::AuditQueryService audit_query(audit_repo);
-
   ctrl::adapters::ControlWsUseCases ws_use_cases(registry, message_service);
-  ctrl::adapters::FrontendStatusUseCases frontend_use_cases;
-  ctrl::adapters::HttpUseCases http_use_cases(registry, orchestrator, audit_query);
 
   ws_use_cases.on_open("sess-1");
+
   std::vector<ctrl::adapters::WsOutboundMessage> ws_out;
   ws_use_cases.on_text(
       ctrl::adapters::WsInboundMessage{
@@ -1038,218 +1018,42 @@ void test_ws_frontend_http_adapters() {
           0,
           nlohmann::json{{"site_id", "lab-50"}, {"capabilities", {"host_probe_get"}}}},
       ws_out);
-  require(!ws_out.empty(), "register should produce reply");
-  require(ws_out.front().type == "register_ack", "reply should be register_ack");
+  require(ws_out.size() == 1, "register should produce one reply");
+  require(
+      ws_out.front().type == owt::protocol::v4::agent::kTypeServerRegisterAck,
+      "reply should be server.register.ack");
 
   ctrl::domain::AgentState agent;
   require(
       registry.get_agent("AA:00:00:00:50:01", agent) && agent.online,
       "registered agent should be online");
 
-  frontend_use_cases.subscribe_list("ui-list-1");
-  frontend_use_cases.subscribe_agent("ui-agent-1", "AA:00:00:00:50:01");
-  const auto snapshots = frontend_use_cases.trigger_snapshot(
-      "agent_register",
-      "AA:00:00:00:50:01",
-      nlohmann::json{{"total_count", 1}});
-  require(snapshots.size() == 1, "snapshot should be published to list subscriber");
-  const auto updates = frontend_use_cases.trigger_agent(
-      "agent_heartbeat",
-      "AA:00:00:00:50:01",
-      nlohmann::json{{"online", true}});
-  require(updates.size() == 1, "agent update should be published to observer");
-
-  channel.set_online("AA:00:00:00:50:01", true);
-  ctrl::adapters::PushCommandRequest req;
-  req.input.agent = {"AA:00:00:00:50:01", "agent-50-01"};
-  req.input.kind = ctrl::domain::CommandKind::WakeOnLan;
-  req.input.payload = nlohmann::json{{"mac", "AA:BB:CC:DD:EE:FF"}};
-  req.input.wait_result = false;
-  req.input.actor_type = "test";
-  req.input.actor_id = "tester";
-
-  const auto push_result = http_use_cases.push_command(req);
-  require(push_result.ok, "http push should succeed");
-  const auto command_id = push_result.data.output.command_id;
-  require(!command_id.empty(), "command_id should be returned");
-
-  const auto command_detail = http_use_cases.get_command(command_id, 100);
-  require(command_detail.ok, "http get_command should succeed");
+  ws_out.clear();
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-1",
+          ctrl::adapters::WsMessageKind::Unknown,
+          "trc-unknown",
+          "AA:00:00:00:50:01",
+          "agent-50-01",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json::object()},
+      ws_out);
+  require(ws_out.size() == 1, "unknown kind should produce one reply");
   require(
-      command_detail.data.command.state == ctrl::domain::CommandState::Dispatched,
-      "command should be dispatched");
-
-  ctrl::domain::CommandListFilter command_filter;
-  const auto command_list = http_use_cases.list_commands(command_filter);
-  require(command_list.ok, "http list_commands should succeed");
-  require(!command_list.data.items.empty(), "http list_commands should return at least one row");
-
-  ctrl::domain::AuditListFilter audit_filter;
-  const auto audit_list = http_use_cases.list_audits(audit_filter);
-  require(audit_list.ok, "http list_audits should succeed");
-  require(!audit_list.data.items.empty(), "http list_audits should return at least one row");
-
-  const auto get_agent_result = http_use_cases.get_agent("AA:00:00:00:50:01");
-  require(get_agent_result.ok, "http get_agent should succeed");
+      ws_out.front().type == owt::protocol::v4::agent::kTypeServerError,
+      "unknown kind should return server.error");
+  require(
+      ws_out.front().payload.value("code", std::string{}) ==
+          owt::protocol::v4::error_code::kBadMessageType,
+      "unknown kind should return bad_message_type");
 
   ws_use_cases.on_close("sess-1");
   require(
       registry.get_agent("AA:00:00:00:50:01", agent) && !agent.online,
       "ws close should set agent offline");
-}
-
-void test_command_e2e_submit_ack_terminal_audit_query() {
-  test_clock clock;
-  clock.set(6000);
-  test_id_generator id_generator;
-  in_memory_command_repository command_repo;
-  in_memory_agent_repository agent_repo;
-  in_memory_params_repository params_repo;
-  in_memory_audit_repository audit_repo;
-  fake_agent_channel channel;
-  fake_status_publisher publisher;
-  fake_metrics metrics;
-
-  ctrl::application::ParamsService params_service(params_repo, clock);
-  ctrl::application::AgentRegistryService registry(agent_repo, clock);
-  ctrl::application::CommandOrchestrator orchestrator(
-      command_repo,
-      channel,
-      params_service,
-      audit_repo,
-      publisher,
-      metrics,
-      clock,
-      id_generator);
-  ctrl::application::AgentMessageService message_service(
-      command_repo,
-      registry,
-      publisher,
-      metrics,
-      clock);
-  ctrl::application::AuditQueryService audit_query(audit_repo);
-
-  ctrl::adapters::ControlWsUseCases ws_use_cases(registry, message_service);
-  ctrl::adapters::HttpUseCases http_use_cases(registry, orchestrator, audit_query);
-
-  ws_use_cases.on_open("sess-e2e");
-  std::vector<ctrl::adapters::WsOutboundMessage> ws_out;
-  ws_use_cases.on_text(
-      ctrl::adapters::WsInboundMessage{
-          "sess-e2e",
-          ctrl::adapters::WsMessageKind::Register,
-          "trc-register-e2e",
-          "AA:00:00:00:60:01",
-          "agent-60-01",
-          ctrl::domain::CommandState::Created,
-          "",
-          0,
-          nlohmann::json{{"site_id", "lab-60"}, {"capabilities", {"host_reboot"}}}},
-      ws_out);
-  require(!ws_out.empty(), "register should return ack");
-
-  channel.set_online("AA:00:00:00:60:01", true);
-
-  ctrl::adapters::PushCommandRequest req;
-  req.input.agent = {"AA:00:00:00:60:01", "agent-60-01"};
-  req.input.kind = ctrl::domain::CommandKind::HostReboot;
-  req.input.payload = nlohmann::json{
-      {"host", "10.0.0.60"},
-      {"port", 22},
-      {"user", "root"},
-  };
-  req.input.wait_result = false;
-  req.input.actor_type = "test";
-  req.input.actor_id = "tester";
-
-  const auto push_result = http_use_cases.push_command(req);
-  require(push_result.ok, "push command should succeed");
-  const auto command_id = push_result.data.output.command_id;
-  require(!command_id.empty(), "command_id should not be empty");
-
-  ws_out.clear();
-  ws_use_cases.on_text(
-      ctrl::adapters::WsInboundMessage{
-          "sess-e2e",
-          ctrl::adapters::WsMessageKind::CommandAck,
-          "trc-ack-e2e",
-          "AA:00:00:00:60:01",
-          "agent-60-01",
-          ctrl::domain::CommandState::Acked,
-          command_id,
-          0,
-          nlohmann::json{{"message", "accepted"}}},
-      ws_out);
-
-  ws_use_cases.on_text(
-      ctrl::adapters::WsInboundMessage{
-          "sess-e2e",
-          ctrl::adapters::WsMessageKind::CommandResult,
-          "trc-result-e2e",
-          "AA:00:00:00:60:01",
-          "agent-60-01",
-          ctrl::domain::CommandState::Succeeded,
-          command_id,
-          0,
-          nlohmann::json{{"ok", true}, {"exit_status", 0}}},
-      ws_out);
-
-  const auto command_detail = http_use_cases.get_command(command_id, 100);
-  require(command_detail.ok, "get command should succeed");
-  require(
-      command_detail.data.command.state == ctrl::domain::CommandState::Succeeded,
-      "command should reach succeeded terminal");
-
-  bool has_ack_event = false;
-  bool has_result_event = false;
-  for (const auto& event : command_detail.data.events) {
-    if (event.type == "command_ack_received") {
-      has_ack_event = true;
-    }
-    if (event.type == "command_result_received") {
-      has_result_event = true;
-    }
-  }
-  require(has_ack_event, "ack event should be persisted");
-  require(has_result_event, "result event should be persisted");
-
-  ws_use_cases.on_text(
-      ctrl::adapters::WsInboundMessage{
-          "sess-e2e",
-          ctrl::adapters::WsMessageKind::CommandResult,
-          "trc-result-e2e-dup",
-          "AA:00:00:00:60:01",
-          "agent-60-01",
-          ctrl::domain::CommandState::Failed,
-          command_id,
-          -1,
-          nlohmann::json{{"ok", false}, {"reason", "duplicate"}}},
-      ws_out);
-
-  const auto command_after_duplicate = http_use_cases.get_command(command_id, 100);
-  require(command_after_duplicate.ok, "get command after duplicate should succeed");
-  require(
-      command_after_duplicate.data.command.state == ctrl::domain::CommandState::Succeeded,
-      "duplicate terminal must not override stored terminal");
-
-  bool has_duplicate_event = false;
-  for (const auto& event : command_after_duplicate.data.events) {
-    if (event.type == "command_result_duplicate") {
-      has_duplicate_event = true;
-      break;
-    }
-  }
-  require(has_duplicate_event, "duplicate terminal event should be persisted");
-
-  ctrl::domain::AuditListFilter filter;
-  filter.resource_type = "command";
-  filter.resource_id = command_id;
-  const auto audit_result = http_use_cases.list_audits(filter);
-  require(audit_result.ok, "list audits should succeed");
-  require(!audit_result.data.items.empty(), "audit should contain push record");
-  require(
-      audit_result.data.items.front().action == "control_command_push",
-      "audit action should be control_command_push");
 }
 
 void test_sqlite_store_repository() {
@@ -1435,14 +1239,13 @@ void test_sqlite_store_legacy_backup_and_rebuild() {
 int main() {
   try {
     test_model_types_snake_case_mapping();
-    test_agent_envelope_v3_codec();
+    test_agent_envelope_v4_codec();
     test_jsonrpc_request_validation();
     test_command_orchestrator_submit();
     test_agent_message_terminal_once();
     test_retry_service();
     test_params_rate_limiter_redaction();
-    test_ws_frontend_http_adapters();
-    test_command_e2e_submit_ack_terminal_audit_query();
+    test_control_ws_use_cases_v4_contract();
     test_sqlite_store_repository();
     test_sqlite_store_legacy_backup_and_rebuild();
     std::cout << "owt-ctrl tests passed\n";

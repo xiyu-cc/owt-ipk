@@ -1,5 +1,6 @@
 #include "app/ws/agent_protocol.h"
 #include "json_field_validation.h"
+#include "owt/protocol/v4/contract.h"
 
 namespace app::ws {
 
@@ -11,7 +12,7 @@ bool parse_agent_envelope(std::string_view text, AgentEnvelope& out, std::string
   }
 
   std::string unknown;
-  if (!detail::reject_unknown_fields(root, {"type", "meta", "payload"}, unknown)) {
+  if (!detail::reject_unknown_fields(root, {"type", "meta", "data"}, unknown)) {
     error = "unknown field in envelope: " + unknown;
     return false;
   }
@@ -25,19 +26,19 @@ bool parse_agent_envelope(std::string_view text, AgentEnvelope& out, std::string
     error = "meta is required";
     return false;
   }
-  if (!root.contains("payload") || !root["payload"].is_object()) {
-    error = "payload is required";
+  if (!root.contains("data") || !root["data"].is_object()) {
+    error = "data is required";
     return false;
   }
 
   const auto& meta = root["meta"];
-  if (!detail::reject_unknown_fields(meta, {"version", "trace_id", "ts_ms", "agent_id"}, unknown)) {
+  if (!detail::reject_unknown_fields(meta, {"protocol", "trace_id", "ts_ms", "agent_id"}, unknown)) {
     error = "unknown field in meta: " + unknown;
     return false;
   }
-  if (!meta.contains("version") || !meta["version"].is_string() ||
-      meta["version"].get<std::string>().empty()) {
-    error = "meta.version is required";
+  if (!meta.contains("protocol") || !meta["protocol"].is_string() ||
+      meta["protocol"].get<std::string>().empty()) {
+    error = "meta.protocol is required";
     return false;
   }
   if (!meta.contains("trace_id") || !meta["trace_id"].is_string() ||
@@ -51,11 +52,11 @@ bool parse_agent_envelope(std::string_view text, AgentEnvelope& out, std::string
   }
 
   out.type = root["type"].get<std::string>();
-  out.meta.version = meta["version"].get<std::string>();
+  out.meta.protocol = meta["protocol"].get<std::string>();
   out.meta.trace_id = meta["trace_id"].get<std::string>();
   out.meta.ts_ms = meta["ts_ms"].get<int64_t>();
   out.meta.agent_id = meta.value("agent_id", std::string{});
-  out.payload = root["payload"];
+  out.data = root["data"];
   error.clear();
   return true;
 }
@@ -65,12 +66,12 @@ std::string encode_agent_envelope(const AgentEnvelope& envelope) {
       {"type", envelope.type},
       {"meta",
        {
-           {"version", envelope.meta.version},
+           {"protocol", envelope.meta.protocol},
            {"trace_id", envelope.meta.trace_id},
            {"ts_ms", envelope.meta.ts_ms},
            {"agent_id", envelope.meta.agent_id},
        }},
-      {"payload", envelope.payload},
+      {"data", envelope.data},
   }
       .dump();
 }

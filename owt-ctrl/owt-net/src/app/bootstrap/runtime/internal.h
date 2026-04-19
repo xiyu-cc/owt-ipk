@@ -14,10 +14,13 @@
 #include "ctrl/application/audit_query_service.h"
 #include "ctrl/application/command_orchestrator.h"
 #include "ctrl/application/params_service.h"
+#include "ctrl/application/rate_limiter_service.h"
+#include "ctrl/application/redaction_service.h"
 #include "ctrl/application/retry_service.h"
 #include "detail/ws_deal/handler.h"
 #include "detail/ws_deal/handler_dispatcher.h"
 #include "detail/ws_deal/hub_api.h"
+#include "owt/protocol/v4/contract.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -33,16 +36,15 @@
 
 namespace app::bootstrap::runtime_internal {
 
-constexpr std::string_view kProtocolVersion = "v3";
-constexpr std::string_view kWsAgentRoute = "/ws/v3/agent";
-constexpr std::string_view kWsUiRoute = "/ws/v3/ui";
+constexpr std::string_view kProtocolVersion = owt::protocol::v4::kProtocol;
+constexpr std::string_view kWsAgentRoute = owt::protocol::v4::kWsRouteAgent;
+constexpr std::string_view kWsUiRoute = owt::protocol::v4::kWsRouteUi;
 
 bool parse_int(const nlohmann::json& value, int& out);
 bool parse_int64(const nlohmann::json& value, int64_t& out);
 
 class AppMetrics final : public ctrl::ports::IMetrics {
 public:
-  void record_http_request() override;
   void record_rate_limited(std::string_view actor_id, int64_t retry_after_ms) override;
   void record_command_push() override;
   void record_command_retry(
@@ -58,7 +60,6 @@ public:
       const nlohmann::json& detail) override;
 
 private:
-  std::atomic<uint64_t> http_requests_total_{0};
   std::atomic<uint64_t> rate_limited_total_{0};
   std::atomic<uint64_t> command_push_total_{0};
   std::atomic<uint64_t> command_retry_total_{0};
@@ -164,6 +165,8 @@ struct RuntimeImplState {
   ctrl::application::AgentRegistryService registry_service;
   WsUiPublisher status_publisher;
   ctrl::application::ParamsService params_service;
+  ctrl::application::RateLimiterService rate_limiter_service;
+  ctrl::application::RedactionService redaction_service;
   ctrl::application::CommandOrchestrator command_orchestrator;
   ctrl::application::AgentMessageService agent_message_service;
   ctrl::application::RetryService retry_service;

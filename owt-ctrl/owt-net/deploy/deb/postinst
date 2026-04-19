@@ -12,8 +12,16 @@ ensure_oauth2_proxy_user() {
     fi
 }
 
+reset_owt_net_db() {
+    db_path="/var/lib/owt-net/owt-net.db"
+    db_dir="$(dirname "$db_path")"
+    mkdir -p "$db_dir" >/dev/null 2>&1 || true
+    rm -f "$db_path" >/dev/null 2>&1 || true
+}
+
 if [ "$1" = "configure" ]; then
     ensure_oauth2_proxy_user
+    reset_owt_net_db
 
     if [ -f /etc/owt-net/oauth2-proxy.cfg ]; then
         chown root:oauth2-proxy /etc/owt-net/oauth2-proxy.cfg >/dev/null 2>&1 || true

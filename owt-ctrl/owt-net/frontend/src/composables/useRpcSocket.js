@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { RPC_ERROR_CODES, WS_UI_PATH } from '../protocol/v4'
 
 function buildWsUrl(path) {
   const base = new URL(window.location.href)
@@ -6,7 +7,7 @@ function buildWsUrl(path) {
   return `${protocol}//${base.host}${path}`
 }
 
-export function useRpcSocket(path = '/ws/v3/ui') {
+export function useRpcSocket(path = WS_UI_PATH) {
   const connected = ref(false)
   const lastError = ref('')
 
@@ -78,7 +79,14 @@ export function useRpcSocket(path = '/ws/v3/ui') {
         pending.delete(String(msg.id))
         if (msg.error) {
           const message = msg?.error?.message || 'rpc error'
-          req.reject(new Error(message))
+          const error = new Error(message)
+          error.rpc = msg.error
+          error.code = msg?.error?.data?.code || ''
+          error.retryAfterMs = msg?.error?.data?.retry_after_ms || 0
+          if (error.code === RPC_ERROR_CODES.RATE_LIMITED && error.retryAfterMs > 0) {
+            error.message = `${message} (retry after ${error.retryAfterMs}ms)`
+          }
+          req.reject(error)
           return
         }
         req.resolve(msg.result || {})

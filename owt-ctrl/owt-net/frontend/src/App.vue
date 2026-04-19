@@ -5,8 +5,9 @@ import AgentPanel from './components/AgentPanel.vue'
 import CommandPanel from './components/CommandPanel.vue'
 import ParamsPanel from './components/ParamsPanel.vue'
 import { useRpcSocket } from './composables/useRpcSocket'
+import { RPC_EVENTS, RPC_METHODS, WS_UI_PATH } from './protocol/v4'
 
-const rpc = useRpcSocket('/ws/v3/ui')
+const rpc = useRpcSocket(WS_UI_PATH)
 
 const agents = ref([])
 const selectedAgentMac = ref('')
@@ -51,7 +52,7 @@ function appendCommandEvent(resource) {
 async function refreshAgents() {
   loadingAgents.value = true
   try {
-    const res = await rpc.call('agent_list', { include_offline: true })
+    const res = await rpc.call(RPC_METHODS.AGENT_LIST, { include_offline: true })
     normalizeSnapshot(res?.resource || {})
     lastError.value = ''
   } catch (err) {
@@ -65,9 +66,9 @@ async function loadParams() {
   if (!selectedAgentMac.value) return
   busy.value = true
   try {
-    const res = await rpc.call('params_get', { agent_mac: selectedAgentMac.value })
+    const res = await rpc.call(RPC_METHODS.PARAMS_GET, { agent_mac: selectedAgentMac.value })
     paramsText.value = JSON.stringify(res?.resource?.params || {}, null, 2)
-    lastAction.value = 'params_get completed'
+    lastAction.value = 'params.get completed'
     lastError.value = ''
   } catch (err) {
     lastError.value = err instanceof Error ? err.message : String(err)
@@ -88,13 +89,13 @@ async function saveParams() {
 
   busy.value = true
   try {
-    const res = await rpc.call('params_put', {
+    const res = await rpc.call(RPC_METHODS.PARAMS_UPDATE, {
       agent_mac: selectedAgentMac.value,
       params: parsed
     })
     paramsText.value = JSON.stringify(res?.resource?.params || parsed, null, 2)
     const commandId = res?.resource?.command?.command_id || '-'
-    lastAction.value = `params_put accepted: ${commandId}`
+    lastAction.value = `params.update accepted: ${commandId}`
     lastError.value = ''
   } catch (err) {
     lastError.value = err instanceof Error ? err.message : String(err)
@@ -110,7 +111,7 @@ async function runCommand({ commandType, payload, title }) {
   }
   busy.value = true
   try {
-    const res = await rpc.call('command_submit', {
+    const res = await rpc.call(RPC_METHODS.COMMAND_SUBMIT, {
       agent_mac: selectedAgentMac.value,
       agent_id: selectedAgent.value?.agent_id || selectedAgentMac.value,
       command_type: commandType,
@@ -130,7 +131,7 @@ async function runCommand({ commandType, payload, title }) {
 
 async function bootstrap() {
   try {
-    await rpc.call('subscribe', { scope: 'all' })
+    await rpc.call(RPC_METHODS.SESSION_SUBSCRIBE, { scope: 'all' })
   } catch (_) {
     // ignore
   }
@@ -141,15 +142,15 @@ const offOpen = rpc.on('__open__', () => {
   void bootstrap()
 })
 
-const offSnapshot = rpc.on('agent_snapshot', (params) => {
+const offSnapshot = rpc.on(RPC_EVENTS.AGENT_SNAPSHOT, (params) => {
   normalizeSnapshot(params?.resource || {})
 })
 
-const offAgent = rpc.on('agent_status_update', (params) => {
+const offAgent = rpc.on(RPC_EVENTS.AGENT_UPDATE, (params) => {
   upsertAgent(params?.resource)
 })
 
-const offCommand = rpc.on('command_event', (params) => {
+const offCommand = rpc.on(RPC_EVENTS.COMMAND_EVENT, (params) => {
   appendCommandEvent(params?.resource)
 })
 
@@ -158,7 +159,7 @@ watch(
   async (next) => {
     if (!next || !rpc.connected.value) return
     try {
-      await rpc.call('subscribe', { scope: 'agent', agent_mac: next })
+      await rpc.call(RPC_METHODS.SESSION_SUBSCRIBE, { scope: 'agent', agent_mac: next })
     } catch (_) {
       // ignore
     }
@@ -182,7 +183,7 @@ onUnmounted(() => {
 <template>
   <main class="page">
     <header class="card">
-      <h1>OWT Control v3</h1>
+      <h1>OWT Control v4</h1>
       <p class="hint">WS-only / JSON-RPC 2.0 / agent+ui channels</p>
       <p v-if="lastError" class="error">{{ lastError }}</p>
       <p v-if="lastAction" class="hint">{{ lastAction }}</p>

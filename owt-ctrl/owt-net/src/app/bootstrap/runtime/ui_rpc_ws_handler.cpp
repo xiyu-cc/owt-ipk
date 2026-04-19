@@ -43,8 +43,26 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
     hub.publish_to_session(message.session_id, true, text);
   };
 
+  const auto enforce_rate_limit = [&](std::string_view action) -> bool {
+    int64_t retry_after_ms = 0;
+    const auto key = std::string(message.session_id) + ":" + std::string(action);
+    if (state_.rate_limiter_service.allow(key, state_.clock.now_ms(), retry_after_ms)) {
+      return true;
+    }
+    state_.metrics.record_rate_limited(message.session_id, retry_after_ms);
+    respond(ws::jsonrpc_error(
+        req.id,
+        -32029,
+        "rate limited",
+        nlohmann::json{
+            {"code", std::string(owt::protocol::v4::error_code::kRateLimited)},
+            {"retry_after_ms", retry_after_ms},
+        }));
+    return false;
+  };
+
   try {
-    if (req.method == "subscribe") {
+    if (req.method == owt::protocol::v4::ui::kMethodSessionSubscribe) {
       const auto scope = req.params.value("scope", std::string{"all"});
       if (scope == "all") {
         state_.subscriptions.subscribe_all(message.session_id);
@@ -68,13 +86,13 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       throw std::invalid_argument("scope must be all or agent");
     }
 
-    if (req.method == "unsubscribe") {
+    if (req.method == owt::protocol::v4::ui::kMethodSessionUnsubscribe) {
       state_.subscriptions.unsubscribe(message.session_id);
       respond(ws::jsonrpc_result(req.id, nlohmann::json{{"ok", true}}));
       return;
     }
 
-    if (req.method == "agent_list") {
+    if (req.method == owt::protocol::v4::ui::kMethodAgentList) {
       const bool include_offline = !req.params.contains("include_offline") ||
           !req.params["include_offline"].is_boolean() ||
           req.params["include_offline"].get<bool>();
@@ -98,7 +116,7 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       return;
     }
 
-    if (req.method == "agent_get") {
+    if (req.method == owt::protocol::v4::ui::kMethodAgentGet) {
       if (!req.params.contains("agent_mac") || !req.params["agent_mac"].is_string() ||
           req.params["agent_mac"].get<std::string>().empty()) {
         throw std::invalid_argument("agent_mac is required");
@@ -113,7 +131,7 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       return;
     }
 
-    if (req.method == "params_get") {
+    if (req.method == owt::protocol::v4::ui::kMethodParamsGet) {
       if (!req.params.contains("agent_mac") || !req.params["agent_mac"].is_string() ||
           req.params["agent_mac"].get<std::string>().empty()) {
         throw std::invalid_argument("agent_mac is required");
@@ -124,7 +142,10 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       return;
     }
 
-    if (req.method == "params_put") {
+    if (req.method == owt::protocol::v4::ui::kMethodParamsUpdate) {
+      if (!enforce_rate_limit(req.method)) {
+        return;
+      }
       if (!req.params.contains("agent_mac") || !req.params["agent_mac"].is_string() ||
           req.params["agent_mac"].get<std::string>().empty()) {
         throw std::invalid_argument("agent_mac is required");
@@ -170,7 +191,10 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       return;
     }
 
-    if (req.method == "command_submit") {
+    if (req.method == owt::protocol::v4::ui::kMethodCommandSubmit) {
+      if (!enforce_rate_limit(req.method)) {
+        return;
+      }
       if (!req.params.contains("agent_mac") || !req.params["agent_mac"].is_string() ||
           req.params["agent_mac"].get<std::string>().empty()) {
         throw std::invalid_argument("agent_mac is required");
@@ -202,6 +226,7 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       respond(ws::jsonrpc_result(
           req.id,
           nlohmann::json{
+              {"accepted", true},
               {"agent_mac", input.agent.mac},
               {"agent_id", input.agent.display_id},
               {"command_type", ctrl::domain::to_string(input.kind)},
@@ -209,11 +234,16 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
               {"trace_id", out.trace_id},
               {"status", ctrl::domain::to_string(out.state)},
               {"updated_at_ms", out.updated_at_ms},
+              {"result_meta",
+               {
+                   {"terminal", out.terminal},
+                   {"wait_timed_out", out.wait_timed_out},
+               }},
           }));
       return;
     }
 
-    if (req.method == "command_get") {
+    if (req.method == owt::protocol::v4::ui::kMethodCommandGet) {
       if (!req.params.contains("command_id") || !req.params["command_id"].is_string() ||
           req.params["command_id"].get<std::string>().empty()) {
         throw std::invalid_argument("command_id is required");
@@ -236,7 +266,7 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       return;
     }
 
-    if (req.method == "command_list") {
+    if (req.method == owt::protocol::v4::ui::kMethodCommandList) {
       ctrl::domain::CommandListFilter filter;
       if (req.params.contains("agent_mac")) {
         if (!req.params["agent_mac"].is_string()) {
@@ -306,7 +336,7 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
       return;
     }
 
-    if (req.method == "audit_list") {
+    if (req.method == owt::protocol::v4::ui::kMethodAuditList) {
       ctrl::domain::AuditListFilter filter;
       if (req.params.contains("action")) {
         if (!req.params["action"].is_string()) {
@@ -378,9 +408,9 @@ void UiRpcWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
 
     respond(ws::jsonrpc_error(req.id, -32601, "method not found"));
   } catch (const std::invalid_argument& ex) {
-    respond(ws::jsonrpc_error(req.id, -32602, ex.what()));
+    respond(ws::jsonrpc_error(req.id, -32602, state_.redaction_service.redact_text(ex.what())));
   } catch (const std::exception& ex) {
-    respond(ws::jsonrpc_error(req.id, -32000, ex.what()));
+    respond(ws::jsonrpc_error(req.id, -32000, state_.redaction_service.redact_text(ex.what())));
   }
 }
 

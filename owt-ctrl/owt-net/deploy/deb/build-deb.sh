@@ -133,7 +133,8 @@ if [[ ! -d frontend/node_modules ]]; then
 fi
 (cd frontend && npm run build)
 cmake --preset "${PRESET}" -DOWT_OAUTH2_PROXY_BINARY="${OAUTH2_PROXY_BIN}"
-cmake --build --preset "${PRESET}" --target owt_net
+cmake --build --preset "${PRESET}" --target owt_net owt_ctrl_tests owt_agent_protocol_tests
+ctest --test-dir "${BUILD_DIR}" --output-on-failure
 cpack --config "${BUILD_DIR}/CPackConfig.cmake" -G DEB -B "${OUT_DIR}"
 popd >/dev/null
 

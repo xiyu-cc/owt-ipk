@@ -2,10 +2,6 @@
 
 namespace app::bootstrap::runtime_internal {
 
-void AppMetrics::record_http_request() {
-  ++http_requests_total_;
-}
-
 void AppMetrics::record_rate_limited(std::string_view actor_id, int64_t retry_after_ms) {
   (void)actor_id;
   (void)retry_after_ms;

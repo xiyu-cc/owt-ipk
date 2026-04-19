@@ -1,5 +1,7 @@
 #include "control/control_protocol.h"
 
+#include "owt/protocol/v4/contract.h"
+
 #include <atomic>
 #include <chrono>
 
@@ -8,63 +10,57 @@ namespace control {
 namespace {
 
 std::atomic<uint64_t> g_message_counter{0};
-constexpr const char* kCurrentProtocolVersion = "v3";
+constexpr const char* kCurrentProtocolVersion = "v4";
 
 } // namespace
 
 std::string to_string(message_type value) {
   switch (value) {
-    case message_type::register_agent:
-      return "register";
-    case message_type::register_ack:
-      return "register_ack";
-    case message_type::heartbeat:
-      return "heartbeat";
-    case message_type::heartbeat_ack:
-      return "heartbeat_ack";
-    case message_type::command_push:
-      return "command_push";
-    case message_type::command_ack:
-      return "command_ack";
-    case message_type::command_result:
-      return "command_result";
-    case message_type::error:
-      return "error";
+    case message_type::agent_register:
+      return std::string(owt::protocol::v4::agent::kTypeAgentRegister);
+    case message_type::server_register_ack:
+      return std::string(owt::protocol::v4::agent::kTypeServerRegisterAck);
+    case message_type::agent_heartbeat:
+      return std::string(owt::protocol::v4::agent::kTypeAgentHeartbeat);
+    case message_type::server_command_dispatch:
+      return std::string(owt::protocol::v4::agent::kTypeServerCommandDispatch);
+    case message_type::agent_command_ack:
+      return std::string(owt::protocol::v4::agent::kTypeAgentCommandAck);
+    case message_type::agent_command_result:
+      return std::string(owt::protocol::v4::agent::kTypeAgentCommandResult);
+    case message_type::server_error:
+      return std::string(owt::protocol::v4::agent::kTypeServerError);
   }
   return "unknown";
 }
 
 bool try_parse_message_type(const std::string& text, message_type& out) {
-  if (text == "register" || text == "REGISTER") {
-    out = message_type::register_agent;
+  if (text == owt::protocol::v4::agent::kTypeAgentRegister) {
+    out = message_type::agent_register;
     return true;
   }
-  if (text == "register_ack" || text == "REGISTER_ACK") {
-    out = message_type::register_ack;
+  if (text == owt::protocol::v4::agent::kTypeServerRegisterAck) {
+    out = message_type::server_register_ack;
     return true;
   }
-  if (text == "heartbeat" || text == "HEARTBEAT") {
-    out = message_type::heartbeat;
+  if (text == owt::protocol::v4::agent::kTypeAgentHeartbeat) {
+    out = message_type::agent_heartbeat;
     return true;
   }
-  if (text == "heartbeat_ack" || text == "HEARTBEAT_ACK") {
-    out = message_type::heartbeat_ack;
+  if (text == owt::protocol::v4::agent::kTypeServerCommandDispatch) {
+    out = message_type::server_command_dispatch;
     return true;
   }
-  if (text == "command_push" || text == "COMMAND_PUSH") {
-    out = message_type::command_push;
+  if (text == owt::protocol::v4::agent::kTypeAgentCommandAck) {
+    out = message_type::agent_command_ack;
     return true;
   }
-  if (text == "command_ack" || text == "COMMAND_ACK") {
-    out = message_type::command_ack;
+  if (text == owt::protocol::v4::agent::kTypeAgentCommandResult) {
+    out = message_type::agent_command_result;
     return true;
   }
-  if (text == "command_result" || text == "COMMAND_RESULT") {
-    out = message_type::command_result;
-    return true;
-  }
-  if (text == "error" || text == "ERROR") {
-    out = message_type::error;
+  if (text == owt::protocol::v4::agent::kTypeServerError) {
+    out = message_type::server_error;
     return true;
   }
   return false;

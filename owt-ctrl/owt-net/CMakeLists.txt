@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(owt_net_ctrl VERSION 0.1.0 LANGUAGES CXX)
+project(owt_net_ctrl VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,6 +8,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 enable_testing()
 
 find_package(Threads REQUIRED)
+find_program(CLANG_TIDY_EXE NAMES clang-tidy REQUIRED)
+
+set(OWT_PROTOCOL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../owt-protocol/include")
 
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
@@ -38,9 +41,7 @@ set(OWT_CTRL_CORE_SOURCES
   src/core/application/agent_message_service.cpp
   src/core/application/retry_service.cpp
   src/core/application/audit_query_service.cpp
-  src/core/adapters/http_use_cases.cpp
   src/core/adapters/control_ws_use_cases.cpp
-  src/core/adapters/frontend_status_use_cases.cpp
 )
 
 add_library(${OWT_CTRL_CORE_TARGET} STATIC ${OWT_CTRL_CORE_SOURCES})
@@ -48,6 +49,7 @@ target_include_directories(${OWT_CTRL_CORE_TARGET}
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3
+    ${OWT_PROTOCOL_INCLUDE_DIR}
 )
 target_link_libraries(${OWT_CTRL_CORE_TARGET}
   PUBLIC
@@ -55,6 +57,7 @@ target_link_libraries(${OWT_CTRL_CORE_TARGET}
     nlohmann_json::nlohmann_json
     Threads::Threads
 )
+set_target_properties(${OWT_CTRL_CORE_TARGET} PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
 
 set(OWT_CTRL_TEST_TARGET owt_ctrl_tests)
 add_executable(${OWT_CTRL_TEST_TARGET}
@@ -65,13 +68,34 @@ add_executable(${OWT_CTRL_TEST_TARGET}
 target_include_directories(${OWT_CTRL_TEST_TARGET}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${OWT_PROTOCOL_INCLUDE_DIR}
 )
 target_link_libraries(${OWT_CTRL_TEST_TARGET}
   PRIVATE
     ${OWT_CTRL_CORE_TARGET}
 )
+set_target_properties(${OWT_CTRL_TEST_TARGET} PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
 
 add_test(NAME owt-ctrl-tests COMMAND ${OWT_CTRL_TEST_TARGET})
+
+set(OWT_AGENT_PROTOCOL_TEST_TARGET owt_agent_protocol_tests)
+add_executable(${OWT_AGENT_PROTOCOL_TEST_TARGET}
+  ../owt-agent/tests/agent_protocol_tests.cpp
+  ../owt-agent/src/core/control/control_protocol.cpp
+  ../owt-agent/src/core/control/control_json_codec.cpp
+)
+target_include_directories(${OWT_AGENT_PROTOCOL_TEST_TARGET}
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../owt-agent/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${OWT_PROTOCOL_INCLUDE_DIR}
+)
+target_link_libraries(${OWT_AGENT_PROTOCOL_TEST_TARGET}
+  PRIVATE
+    nlohmann_json::nlohmann_json
+)
+set_target_properties(${OWT_AGENT_PROTOCOL_TEST_TARGET} PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
+add_test(NAME owt-agent-protocol-tests COMMAND ${OWT_AGENT_PROTOCOL_TEST_TARGET})
 
 set(OWT_NET_TARGET owt_net)
 add_executable(${OWT_NET_TARGET}
@@ -97,6 +121,7 @@ target_include_directories(${OWT_NET_TARGET}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost
+    ${OWT_PROTOCOL_INCLUDE_DIR}
 )
 target_compile_definitions(${OWT_NET_TARGET}
   PRIVATE
@@ -110,3 +135,38 @@ target_link_libraries(${OWT_NET_TARGET}
     nlohmann_json::nlohmann_json
     Threads::Threads
 )
+set_target_properties(${OWT_NET_TARGET} PROPERTIES CXX_CLANG_TIDY "${CLANG_TIDY_EXE}")
+
+set(OWT_AGENT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../owt-agent/include")
+set(OWT_AGENT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../owt-agent/src/core")
+set(OWT_AGENT_CLANG_TIDY_FILES
+  "${OWT_AGENT_SOURCE_DIR}/control/agent_runtime.cpp"
+  "${OWT_AGENT_SOURCE_DIR}/control/control_protocol.cpp"
+  "${OWT_AGENT_SOURCE_DIR}/control/control_json_codec.cpp"
+)
+
+set(OWT_AGENT_CLANG_TIDY_COMMON_ARGS
+  "-std=c++17"
+  "-DBOOST_ERROR_CODE_HEADER_ONLY"
+  "-I${OWT_AGENT_INCLUDE_DIR}"
+  "-I${CMAKE_CURRENT_SOURCE_DIR}/third_party/boost"
+  "-I${CMAKE_CURRENT_SOURCE_DIR}/third_party/spdlog/include"
+  "-I${CMAKE_CURRENT_SOURCE_DIR}/third_party"
+  "-I${OWT_PROTOCOL_INCLUDE_DIR}"
+)
+
+set(OWT_AGENT_CLANG_TIDY_COMMANDS
+  COMMAND ${CMAKE_COMMAND} -E echo "Running clang-tidy for owt-agent control sources"
+)
+foreach(AGENT_FILE IN LISTS OWT_AGENT_CLANG_TIDY_FILES)
+  list(APPEND OWT_AGENT_CLANG_TIDY_COMMANDS
+    COMMAND ${CLANG_TIDY_EXE} ${AGENT_FILE} -- ${OWT_AGENT_CLANG_TIDY_COMMON_ARGS}
+  )
+endforeach()
+
+add_custom_target(owt_agent_clang_tidy ALL
+  ${OWT_AGENT_CLANG_TIDY_COMMANDS}
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  VERBATIM
+)
+add_dependencies(${OWT_NET_TARGET} owt_agent_clang_tidy)

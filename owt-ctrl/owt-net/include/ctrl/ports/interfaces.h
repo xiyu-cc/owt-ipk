@@ -135,7 +135,6 @@ public:
 class IMetrics {
 public:
   virtual ~IMetrics() = default;
-  virtual void record_http_request() = 0;
   virtual void record_rate_limited(std::string_view actor_id, int64_t retry_after_ms) = 0;
   virtual void record_command_push() = 0;
   virtual void record_command_retry(

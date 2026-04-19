@@ -33,21 +33,29 @@ void AgentWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
     state_.send_agent_envelope(
         hub,
         message.session_id,
-        "error",
+        owt::protocol::v4::agent::kTypeServerError,
         state_.next_trace_id(),
         "",
-        nlohmann::json{{"code", "bad_message_format"}, {"message", parse_error}});
+        nlohmann::json{
+            {"code", std::string(owt::protocol::v4::error_code::kBadMessageFormat)},
+            {"message", parse_error},
+        });
     return;
   }
 
-  if (envelope.meta.version != kProtocolVersion) {
+  if (envelope.meta.protocol != kProtocolVersion) {
     state_.send_agent_envelope(
         hub,
         message.session_id,
-        "error",
+        owt::protocol::v4::agent::kTypeServerError,
         envelope.meta.trace_id,
         envelope.meta.agent_id,
-        nlohmann::json{{"code", "unsupported_protocol_version"}, {"message", "unsupported version"}});
+        nlohmann::json{
+            {"code", std::string(owt::protocol::v4::error_code::kUnsupportedProtocol)},
+            {"message", "unsupported protocol"},
+            {"protocol", envelope.meta.protocol},
+            {"expected", std::string(kProtocolVersion)},
+        });
     return;
   }
 
@@ -58,108 +66,92 @@ void AgentWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
 
   const auto session_agent = state_.agent_channel.find_agent_for_session(message.session_id);
 
-  if (envelope.type == "register") {
-    if (!envelope.payload.contains("agent_mac") || !envelope.payload["agent_mac"].is_string() ||
-        envelope.payload["agent_mac"].get<std::string>().empty()) {
-      state_.send_agent_envelope(
-          hub,
-          message.session_id,
-          "error",
-          in.trace_id,
-          in.agent_id,
-          nlohmann::json{{"code", "bad_message_format"}, {"message", "agent_mac is required"}});
+  const auto send_bad_message = [&](std::string_view text) {
+    state_.send_agent_envelope(
+        hub,
+        message.session_id,
+        owt::protocol::v4::agent::kTypeServerError,
+        in.trace_id.empty() ? state_.next_trace_id() : in.trace_id,
+        in.agent_id,
+        nlohmann::json{
+            {"code", std::string(owt::protocol::v4::error_code::kBadMessageFormat)},
+            {"message", std::string(text)},
+        });
+  };
+
+  if (envelope.type == owt::protocol::v4::agent::kTypeAgentRegister) {
+    if (!envelope.data.contains("agent_mac") || !envelope.data["agent_mac"].is_string() ||
+        envelope.data["agent_mac"].get<std::string>().empty()) {
+      send_bad_message("agent_mac is required");
       return;
     }
     in.kind = ctrl::adapters::WsMessageKind::Register;
-    in.agent_mac = envelope.payload["agent_mac"].get<std::string>();
+    in.agent_mac = envelope.data["agent_mac"].get<std::string>();
     if (in.agent_id.empty()) {
-      in.agent_id = envelope.payload.value("agent_id", std::string{});
+      in.agent_id = envelope.data.value("agent_id", std::string{});
     }
-    in.payload = envelope.payload;
+    in.payload = envelope.data;
     if (!in.agent_mac.empty()) {
       state_.agent_channel.bind_session(in.agent_mac, in.agent_id, in.session_token);
     }
-  } else if (envelope.type == "heartbeat") {
+  } else if (envelope.type == owt::protocol::v4::agent::kTypeAgentHeartbeat) {
     in.kind = ctrl::adapters::WsMessageKind::Heartbeat;
-    in.agent_mac = envelope.payload.value("agent_mac", session_agent);
+    in.agent_mac = envelope.data.value("agent_mac", session_agent);
     if (in.agent_mac.empty()) {
-      state_.send_agent_envelope(
-          hub,
-          message.session_id,
-          "error",
-          in.trace_id,
-          in.agent_id,
-          nlohmann::json{{"code", "bad_message_format"}, {"message", "agent_mac is required"}});
+      send_bad_message("agent_mac is required");
       return;
     }
     in.payload = nlohmann::json{
-        {"heartbeat_at_ms", envelope.payload.value("heartbeat_at_ms", static_cast<int64_t>(0))},
-        {"stats", envelope.payload.value("stats", nlohmann::json::object())},
+        {"heartbeat_at_ms", envelope.data.value("heartbeat_at_ms", static_cast<int64_t>(0))},
+        {"stats", envelope.data.value("stats", nlohmann::json::object())},
     };
-  } else if (envelope.type == "command_ack") {
+  } else if (envelope.type == owt::protocol::v4::agent::kTypeAgentCommandAck) {
     in.kind = ctrl::adapters::WsMessageKind::CommandAck;
-    in.agent_mac = envelope.payload.value("agent_mac", session_agent);
-    if (in.agent_mac.empty() || !envelope.payload.contains("command_id") ||
-        !envelope.payload["command_id"].is_string() || envelope.payload["command_id"].get<std::string>().empty() ||
-        !envelope.payload.contains("status") || !envelope.payload["status"].is_string()) {
-      state_.send_agent_envelope(
-          hub,
-          message.session_id,
-          "error",
-          in.trace_id,
-          in.agent_id,
-          nlohmann::json{{"code", "bad_message_format"}, {"message", "invalid command_ack payload"}});
+    in.agent_mac = envelope.data.value("agent_mac", session_agent);
+    if (in.agent_mac.empty() || !envelope.data.contains("command_id") ||
+        !envelope.data["command_id"].is_string() ||
+        envelope.data["command_id"].get<std::string>().empty() ||
+        !envelope.data.contains("status") || !envelope.data["status"].is_string()) {
+      send_bad_message("invalid agent.command.ack data");
       return;
     }
-    in.command_id = envelope.payload["command_id"].get<std::string>();
+
+    in.command_id = envelope.data["command_id"].get<std::string>();
     ctrl::domain::CommandState state = ctrl::domain::CommandState::Acked;
-    if (!ctrl::domain::try_parse_command_state(envelope.payload["status"].get<std::string>(), state)) {
-      state_.send_agent_envelope(
-          hub,
-          message.session_id,
-          "error",
-          in.trace_id,
-          in.agent_id,
-          nlohmann::json{{"code", "bad_message_format"}, {"message", "invalid status"}});
+    if (!ctrl::domain::try_parse_command_state(envelope.data["status"].get<std::string>(), state)) {
+      send_bad_message("invalid command status");
       return;
     }
+
     in.command_state = state;
-    in.payload = nlohmann::json{{"message", envelope.payload.value("message", std::string{})}};
-  } else if (envelope.type == "command_result") {
+    in.payload = nlohmann::json{{"message", envelope.data.value("message", std::string{})}};
+  } else if (envelope.type == owt::protocol::v4::agent::kTypeAgentCommandResult) {
     in.kind = ctrl::adapters::WsMessageKind::CommandResult;
-    in.agent_mac = envelope.payload.value("agent_mac", session_agent);
-    if (in.agent_mac.empty() || !envelope.payload.contains("command_id") ||
-        !envelope.payload["command_id"].is_string() || envelope.payload["command_id"].get<std::string>().empty() ||
-        !envelope.payload.contains("final_status") || !envelope.payload["final_status"].is_string() ||
-        !envelope.payload.contains("exit_code") || !envelope.payload["exit_code"].is_number_integer() ||
-        !envelope.payload.contains("result") || !envelope.payload["result"].is_object()) {
-      state_.send_agent_envelope(
-          hub,
-          message.session_id,
-          "error",
-          in.trace_id,
-          in.agent_id,
-          nlohmann::json{{"code", "bad_message_format"}, {"message", "invalid command_result payload"}});
+    in.agent_mac = envelope.data.value("agent_mac", session_agent);
+    if (in.agent_mac.empty() || !envelope.data.contains("command_id") ||
+        !envelope.data["command_id"].is_string() ||
+        envelope.data["command_id"].get<std::string>().empty() ||
+        !envelope.data.contains("final_status") || !envelope.data["final_status"].is_string() ||
+        !envelope.data.contains("exit_code") || !envelope.data["exit_code"].is_number_integer() ||
+        !envelope.data.contains("result") || !envelope.data["result"].is_object()) {
+      send_bad_message("invalid agent.command.result data");
       return;
     }
-    in.command_id = envelope.payload["command_id"].get<std::string>();
+
+    in.command_id = envelope.data["command_id"].get<std::string>();
     ctrl::domain::CommandState final_state = ctrl::domain::CommandState::Failed;
-    if (!ctrl::domain::try_parse_command_state(envelope.payload["final_status"].get<std::string>(), final_state)) {
-      state_.send_agent_envelope(
-          hub,
-          message.session_id,
-          "error",
-          in.trace_id,
-          in.agent_id,
-          nlohmann::json{{"code", "bad_message_format"}, {"message", "invalid final_status"}});
+    if (!ctrl::domain::try_parse_command_state(
+            envelope.data["final_status"].get<std::string>(), final_state)) {
+      send_bad_message("invalid final_status");
       return;
     }
+
     in.command_state = final_state;
-    in.exit_code = envelope.payload["exit_code"].get<int>();
-    in.payload = envelope.payload["result"];
+    in.exit_code = envelope.data["exit_code"].get<int>();
+    in.payload = envelope.data["result"];
   } else {
     in.kind = ctrl::adapters::WsMessageKind::Unknown;
-    in.payload = envelope.payload;
+    in.payload = envelope.data;
   }
 
   std::vector<ctrl::adapters::WsOutboundMessage> out;
@@ -169,10 +161,13 @@ void AgentWsHandler::on_message(ws_deal::ws_hub_api& hub, ws_deal::inbound_messa
     log::warn("control ws handler failed: {}", ex.what());
     out.push_back(ctrl::adapters::WsOutboundMessage{
         in.session_token,
-        "error",
+        std::string(owt::protocol::v4::agent::kTypeServerError),
         in.trace_id,
         in.agent_id,
-        nlohmann::json{{"code", "internal_error"}, {"message", "control handler failed"}},
+        nlohmann::json{
+            {"code", std::string(owt::protocol::v4::error_code::kInternalError)},
+            {"message", "control handler failed"},
+        },
     });
   }
 

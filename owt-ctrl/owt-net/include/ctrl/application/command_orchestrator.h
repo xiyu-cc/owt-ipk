@@ -60,7 +60,7 @@ private:
       const domain::CommandSnapshot& snapshot,
       bool wait_timed_out);
 
-  domain::CommandSnapshot wait_for_http_result(
+  domain::CommandSnapshot wait_for_command_result(
       std::string_view command_id,
       int wait_timeout_ms,
       bool& wait_timed_out) const;

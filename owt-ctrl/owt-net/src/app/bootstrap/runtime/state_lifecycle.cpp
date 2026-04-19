@@ -26,7 +26,12 @@ RuntimeImplState::RuntimeImplState(const Config& in_config)
           clock),
       retry_service(store, agent_channel, status_publisher, metrics, clock),
       audit_query_service(store),
-      control_ws_use_cases(registry_service, agent_message_service) {}
+      control_ws_use_cases(registry_service, agent_message_service) {
+  rate_limiter_service.configure(
+      config.server.enable_rate_limit,
+      config.server.rate_limit_rps,
+      config.server.rate_limit_burst);
+}
 
 std::string RuntimeImplState::next_trace_id() {
   const auto now = clock.now_ms();
@@ -46,11 +51,11 @@ void RuntimeImplState::send_agent_envelope(
   }
   ws::AgentEnvelope envelope;
   envelope.type = std::string(type);
-  envelope.meta.version = std::string(kProtocolVersion);
+  envelope.meta.protocol = std::string(kProtocolVersion);
   envelope.meta.trace_id = trace_id.empty() ? next_trace_id() : std::string(trace_id);
   envelope.meta.ts_ms = clock.now_ms();
   envelope.meta.agent_id = std::string(agent_id);
-  envelope.payload = payload;
+  envelope.data = payload;
   hub.publish_to_session(
       std::string(session_id),
       true,

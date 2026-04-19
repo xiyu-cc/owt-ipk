@@ -1,4 +1,5 @@
 #include "ctrl/adapters/control_ws_use_cases.h"
+#include "owt/protocol/v4/contract.h"
 
 #include <stdexcept>
 #include <string>
@@ -27,11 +28,11 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
       if (in.agent_mac.empty()) {
         out.push_back(WsOutboundMessage{
             in.session_token,
-            "error",
+            std::string(owt::protocol::v4::agent::kTypeServerError),
             in.trace_id,
             in.agent_id,
             nlohmann::json{
-                {"code", "bad_message_format"},
+                {"code", std::string(owt::protocol::v4::error_code::kBadMessageFormat)},
                 {"message", "register payload missing agent_mac"},
             }});
         return;
@@ -41,7 +42,7 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
       messages_.on_agent_registered(in.agent_mac, in.agent_id, in.payload);
       out.push_back(WsOutboundMessage{
           in.session_token,
-          "register_ack",
+          std::string(owt::protocol::v4::agent::kTypeServerRegisterAck),
           in.trace_id,
           in.agent_id,
           nlohmann::json{{"ok", true}, {"message", "registered"}},
@@ -61,13 +62,6 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
         stats = in.payload["stats"];
       }
       registry_.on_heartbeat(in.agent_mac, stats, heartbeat_at_ms);
-      out.push_back(WsOutboundMessage{
-          in.session_token,
-          "heartbeat_ack",
-          in.trace_id,
-          in.agent_id,
-          nlohmann::json::object(),
-      });
       return;
     }
     case WsMessageKind::CommandAck:
@@ -90,11 +84,11 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
     case WsMessageKind::Unknown:
       out.push_back(WsOutboundMessage{
           in.session_token,
-          "error",
+          std::string(owt::protocol::v4::agent::kTypeServerError),
           in.trace_id,
           in.agent_id,
           nlohmann::json{
-              {"code", "bad_message_type"},
+              {"code", std::string(owt::protocol::v4::error_code::kBadMessageType)},
               {"message", "unsupported message type"},
           }});
       return;

@@ -10,14 +10,13 @@
 namespace control {
 
 enum class message_type {
-  register_agent,
-  register_ack,
-  heartbeat,
-  heartbeat_ack,
-  command_push,
-  command_ack,
-  command_result,
-  error,
+  agent_register,
+  server_register_ack,
+  agent_heartbeat,
+  server_command_dispatch,
+  agent_command_ack,
+  agent_command_result,
+  server_error,
 };
 
 enum class command_type {
@@ -73,10 +72,6 @@ struct register_ack_payload {
   std::string message;
 };
 
-struct heartbeat_ack_payload {
-  int64_t server_time_ms = 0;
-};
-
 struct command {
   std::string command_id;
   std::string idempotency_key;
@@ -112,19 +107,18 @@ using payload_variant = std::variant<
     register_payload,
     heartbeat_payload,
     register_ack_payload,
-    heartbeat_ack_payload,
     command,
     command_ack_payload,
     command_result_payload,
     error_payload>;
 
 struct envelope {
-  message_type type = message_type::heartbeat;
-  std::string protocol_version = "v3";
+  message_type type = message_type::agent_heartbeat;
+  std::string protocol = "v4";
   int64_t sent_at_ms = 0;
   std::string trace_id;
   std::string agent_id;
-  payload_variant payload;
+  payload_variant data;
 };
 
 } // namespace control
