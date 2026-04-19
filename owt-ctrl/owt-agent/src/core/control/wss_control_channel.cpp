@@ -66,7 +66,7 @@ bool parse_endpoint(const std::string& endpoint, endpoint_parts& out, std::strin
   auto target_pos = rest.find('/');
   auto authority = rest.substr(0, target_pos);
   // If target path is omitted, use control-channel default path.
-  out.target = (target_pos == std::string::npos) ? "/ws/control" : rest.substr(target_pos);
+  out.target = (target_pos == std::string::npos) ? "/ws/v3/agent" : rest.substr(target_pos);
 
   if (authority.empty()) {
     err = "endpoint missing authority";
@@ -109,13 +109,14 @@ bool flush_outgoing(
     queue.clear();
   }
 
-  for (const auto& payload : batch) {
+  for (std::size_t i = 0; i < batch.size(); ++i) {
+    const auto& payload = batch[i];
     beast::error_code ec;
     ws.text(true);
     ws.write(asio::buffer(payload), ec);
     if (ec) {
       std::lock_guard<std::mutex> lock(mutex);
-      queue.insert(queue.begin(), payload);
+      queue.insert(queue.begin(), batch.begin() + i, batch.end());
       return false;
     }
     ++sent_count;
@@ -223,11 +224,26 @@ bool wss_control_channel::send(const envelope& message) {
       log::warn("wss send dropped: channel is not running");
       return false;
     }
-    if (outgoing_messages_.size() >= kMaxOutgoingQueue) {
-      log::warn("wss send dropped: outgoing queue full");
+    // Heartbeat is periodic telemetry and should not be buffered while offline.
+    // Otherwise reconnect will burst stale heartbeats and break expected cadence.
+    if (message.type == message_type::heartbeat && !connected_) {
+      log::warn("heartbeat dropped: channel not connected");
       return false;
     }
-    outgoing_messages_.push_back(payload);
+
+    if (message.type == message_type::register_agent) {
+      // Ensure REGISTER is sent before any buffered payloads on a new connection.
+      if (outgoing_messages_.size() >= kMaxOutgoingQueue) {
+        outgoing_messages_.pop_back();
+      }
+      outgoing_messages_.push_front(payload);
+    } else {
+      if (outgoing_messages_.size() >= kMaxOutgoingQueue) {
+        log::warn("wss send dropped: outgoing queue full");
+        return false;
+      }
+      outgoing_messages_.push_back(payload);
+    }
   }
   cv_.notify_all();
   return true;

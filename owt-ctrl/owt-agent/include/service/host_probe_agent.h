@@ -36,7 +36,7 @@ struct host_probe_snapshot {
   int64_t updated_at_ms = 0;
 };
 
-void start_host_probe_agent();
+void start_host_probe_agent(int status_collect_interval_ms);
 void stop_host_probe_agent();
 host_probe_snapshot get_host_probe_snapshot();
 bool is_host_probe_monitoring_enabled();

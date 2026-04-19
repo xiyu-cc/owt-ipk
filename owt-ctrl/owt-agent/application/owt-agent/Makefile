@@ -66,8 +66,6 @@ define Package/$(PKG_NAME)/install
 	$(INSTALL_CONF) ./files/owt-agent.config $(1)/etc/config/owt-agent
 	$(INSTALL_DIR) $(1)/etc/owt-agent
 	$(INSTALL_CONF) ./files/config.ini $(1)/etc/owt-agent/config.ini
-	$(INSTALL_DIR) $(1)/usr/share/doc/owt-agent
-	$(INSTALL_DATA) ./files/README.openwrt $(1)/usr/share/doc/owt-agent/README.openwrt
 endef
 
 define Package/$(PKG_NAME)/postinst

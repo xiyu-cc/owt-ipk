@@ -19,6 +19,10 @@ if [ "$1" = "configure" ]; then
         chown root:oauth2-proxy /etc/owt-net/oauth2-proxy.cfg >/dev/null 2>&1 || true
         chmod 640 /etc/owt-net/oauth2-proxy.cfg >/dev/null 2>&1 || true
     fi
+    if [ -f /etc/owt-net/google-allowed-emails.txt ]; then
+        chown root:oauth2-proxy /etc/owt-net/google-allowed-emails.txt >/dev/null 2>&1 || true
+        chmod 640 /etc/owt-net/google-allowed-emails.txt >/dev/null 2>&1 || true
+    fi
 
     if [ -d /etc/nginx/sites-enabled ] && [ -f /etc/nginx/sites-available/owt-net.conf ] \
        && [ ! -e /etc/nginx/sites-enabled/owt-net.conf ]; then

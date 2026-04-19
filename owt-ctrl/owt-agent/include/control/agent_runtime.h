@@ -2,6 +2,8 @@
 
 #include "control/wss_control_channel.h"
 
+#include <nlohmann/json.hpp>
+
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -15,9 +17,10 @@ namespace control {
 
 struct agent_runtime_options {
   std::string agent_id = "agent-local";
-  std::string protocol_version = "v1.0-draft";
+  std::string agent_mac = "";
+  std::string protocol_version = "v3";
 
-  std::string wss_endpoint = "wss://owt.wzhex.com/ws/control";
+  std::string wss_endpoint = "wss://owt.wzhex.com/ws/v3/agent";
 };
 
 class agent_runtime {
@@ -43,7 +46,7 @@ private:
       const std::string& command_id,
       command_status final_status,
       int exit_code,
-      const std::string& result_json);
+      const nlohmann::json& result);
   void enqueue_command(const std::string& trace_id, const command& cmd);
   void execution_loop();
 

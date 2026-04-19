@@ -10,7 +10,7 @@ namespace control {
 struct channel_start_options {
   std::string agent_id;
   std::string endpoint;
-  std::string protocol_version = "v1.0-draft";
+  std::string protocol_version = "v3";
 };
 
 struct channel_callbacks {

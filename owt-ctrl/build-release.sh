@@ -25,6 +25,9 @@ if [[ -z "${SDK_DIR}" || ! -d "${SDK_DIR}" ]]; then
   exit 1
 fi
 
+echo "[clean] Purge old release artifacts -> ${OWT_OUT_ROOT}"
+find "${OWT_OUT_ROOT}" -maxdepth 1 -type f \( -name '*.deb' -o -name 'owt-agent*.ipk' \) -delete 2>/dev/null || true
+
 echo "[1/2] Build deb release -> ${OWT_OUT_ROOT}"
 "${SCRIPT_DIR}/owt-net/deploy/deb/build-deb.sh" gcc-release "${OWT_OUT_ROOT}"
 
@@ -32,9 +35,11 @@ echo "[2/2] Build ipk release (owt-agent) -> ${OWT_OUT_ROOT}"
 if [[ -d "${SDK_DIR}/package/feeds/owt-ctrl/owt-agent" ]]; then
   OWT_AGENT_PKG_DIR="${SDK_DIR}/package/feeds/owt-ctrl/owt-agent"
   OWT_AGENT_BUILD_TARGET="package/feeds/owt-ctrl/owt-agent/compile"
+  OWT_AGENT_CLEAN_TARGET="package/feeds/owt-ctrl/owt-agent/clean"
 elif [[ -d "${SDK_DIR}/package/owt-agent" ]]; then
   OWT_AGENT_PKG_DIR="${SDK_DIR}/package/owt-agent"
   OWT_AGENT_BUILD_TARGET="package/owt-agent/compile"
+  OWT_AGENT_CLEAN_TARGET="package/owt-agent/clean"
 else
   echo "owt-agent package not found in SDK. Expected one of:" >&2
   echo "  ${SDK_DIR}/package/feeds/owt-ctrl/owt-agent" >&2
@@ -58,6 +63,10 @@ ln -snf "${OWT_AGENT_REPO_ROOT}/include" "${SDK_DIR}/include/include"
 
 # Remove stale ipk outputs so a skipped compile cannot silently reuse old artifacts.
 find "${SDK_DIR}/bin/packages" -type f -name 'owt-agent*.ipk' -delete 2>/dev/null || true
+find "${OWT_OUT_ROOT}" -maxdepth 1 -type f -name 'owt-agent*.ipk' -delete 2>/dev/null || true
+
+echo "[clean] Force OpenWrt package clean target: ${OWT_AGENT_CLEAN_TARGET}"
+make -C "${SDK_DIR}" "${OWT_AGENT_CLEAN_TARGET}" -j"$(nproc)"
 
 make -C "${SDK_DIR}" "${OWT_AGENT_BUILD_TARGET}" -j"$(nproc)"
 

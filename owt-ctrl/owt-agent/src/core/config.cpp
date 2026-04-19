@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <stdexcept>
 
 namespace owt_agent {
 
@@ -56,10 +57,26 @@ Config loadConfig(const std::string& path) {
     if (section == "agent") {
       if (key == "agent_id") {
         cfg.agent.agent_id = value;
+      } else if (key == "agent_mac") {
+        cfg.agent.agent_mac = value;
       } else if (key == "protocol_version") {
         cfg.agent.protocol_version = value;
       } else if (key == "wss_endpoint") {
         cfg.agent.wss_endpoint = value;
+      } else if (key == "heartbeat_interval_ms") {
+        try {
+          const int parsed = std::stoi(value);
+          cfg.agent.heartbeat_interval_ms = std::clamp(parsed, 1000, 120000);
+        } catch (const std::exception&) {
+          // keep default
+        }
+      } else if (key == "status_collect_interval_ms") {
+        try {
+          const int parsed = std::stoi(value);
+          cfg.agent.status_collect_interval_ms = std::clamp(parsed, 200, 60000);
+        } catch (const std::exception&) {
+          // keep default
+        }
       }
       continue;
     }

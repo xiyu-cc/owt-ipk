@@ -8,6 +8,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <exception>
 #include <limits>
 #include <string>
 
@@ -32,13 +34,41 @@ bool update_int_field(
     error = std::string("field ") + key + " must be integer";
     return false;
   }
-  const int value = j[key].get<int>();
+  int64_t parsed = 0;
+  try {
+    parsed = j[key].get<int64_t>();
+  } catch (const std::exception&) {
+    error = std::string("field ") + key + " must be integer";
+    return false;
+  }
+  if (parsed < static_cast<int64_t>(std::numeric_limits<int>::min()) ||
+      parsed > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+    error = std::string("field ") + key + " out of range";
+    return false;
+  }
+  const int value = static_cast<int>(parsed);
   if (value < min_value || value > max_value) {
     error = std::string("field ") + key + " out of range";
     return false;
   }
   target = value;
   return true;
+}
+
+template <typename T>
+T payload_value_or(const nlohmann::json& payload, const char* key, const T& fallback) {
+  if (!payload.is_object()) {
+    return fallback;
+  }
+  const auto it = payload.find(key);
+  if (it == payload.end() || it->is_null()) {
+    return fallback;
+  }
+  try {
+    return it->get<T>();
+  } catch (const std::exception&) {
+    return fallback;
+  }
 }
 
 bool update_string_field(
@@ -100,6 +130,17 @@ nlohmann::json probe_snapshot_to_json(const service::host_probe_snapshot& snap) 
   };
 }
 
+ nlohmann::json build_heartbeat_stats() {
+  const bool monitoring_enabled = service::is_host_probe_monitoring_enabled();
+  if (!monitoring_enabled) {
+    return nlohmann::json(
+        {{"monitoring_enabled", false}, {"status", "paused"}, {"message", "status collection disabled"}});
+  }
+  auto stats = probe_snapshot_to_json(service::get_host_probe_snapshot());
+  stats["monitoring_enabled"] = true;
+  return stats;
+}
+
 bool is_command_expired(const command& cmd, int64_t now_ms) {
   return cmd.expires_at_ms > 0 && now_ms >= cmd.expires_at_ms;
 }
@@ -118,7 +159,9 @@ bool agent_runtime::start(const agent_runtime_options& options) {
   }
 
   options_ = options;
+  running_.store(true, std::memory_order_relaxed);
   if (!start_channel(*wss_channel_, options_.wss_endpoint)) {
+    running_.store(false, std::memory_order_relaxed);
     log::error("agent runtime start failed: wss channel unavailable");
     return false;
   }
@@ -134,9 +177,8 @@ bool agent_runtime::start(const agent_runtime_options& options) {
   }
   execution_thread_ = std::thread(&agent_runtime::execution_loop, this);
 
-  running_.store(true, std::memory_order_relaxed);
   log::info("agent runtime started");
-  return send_register();
+  return true;
 }
 
 void agent_runtime::stop() {
@@ -168,22 +210,23 @@ bool agent_runtime::send_register() {
   }
 
   envelope message;
-  message.message_id = make_message_id();
   message.type = message_type::register_agent;
   message.protocol_version = options_.protocol_version;
   message.sent_at_ms = unix_time_ms_now();
+  message.trace_id = make_message_id();
   message.agent_id = options_.agent_id;
   message.payload = register_payload{
+      options_.agent_mac,
       options_.agent_id,
       kDefaultSiteId,
       kAgentVersion,
-      {"WOL_WAKE",
-       "HOST_REBOOT",
-       "HOST_POWEROFF",
-       "HOST_PROBE_GET",
-       "MONITORING_SET",
-       "PARAMS_GET",
-       "PARAMS_SET"}};
+      {"wol_wake",
+       "host_reboot",
+       "host_poweroff",
+       "host_probe_get",
+       "monitoring_set",
+       "params_get",
+       "params_set"}};
   return wss_channel_->send(message);
 }
 
@@ -193,20 +236,22 @@ bool agent_runtime::send_heartbeat() {
   }
 
   envelope message;
-  message.message_id = make_message_id();
   message.type = message_type::heartbeat;
   message.protocol_version = options_.protocol_version;
   message.sent_at_ms = unix_time_ms_now();
+  message.trace_id = make_message_id();
   message.agent_id = options_.agent_id;
-  message.payload = heartbeat_payload{
-      unix_time_ms_now(), probe_snapshot_to_json(service::get_host_probe_snapshot()).dump()};
+  message.payload = heartbeat_payload{unix_time_ms_now(), build_heartbeat_stats()};
   return wss_channel_->send(message);
 }
 
 channel_callbacks agent_runtime::build_callbacks(const std::string& endpoint) {
   channel_callbacks callbacks;
-  callbacks.on_connected = [endpoint]() {
+  callbacks.on_connected = [this, endpoint]() {
     log::info("control channel connected: endpoint={}", endpoint);
+    if (!send_register()) {
+      log::warn("send register on connected failed: endpoint={}", endpoint);
+    }
   };
   callbacks.on_disconnected = [endpoint]() {
     log::warn("control channel disconnected: endpoint={}", endpoint);
@@ -216,9 +261,9 @@ channel_callbacks agent_runtime::build_callbacks(const std::string& endpoint) {
   };
   callbacks.on_message = [this, endpoint](const envelope& message) {
     log::info(
-        "control channel message received (endpoint={}): id={}, type={}",
+        "control channel message received (endpoint={}): trace_id={}, type={}",
         endpoint,
-        message.message_id,
+        message.trace_id,
         to_string(message.type));
     handle_channel_message(message);
   };
@@ -287,7 +332,6 @@ void agent_runtime::handle_channel_message(const envelope& message) {
   const bool should_execute = mark_command_seen(cmd->command_id);
 
   envelope ack;
-  ack.message_id = make_message_id();
   ack.type = message_type::command_ack;
   ack.protocol_version = options_.protocol_version;
   ack.sent_at_ms = unix_time_ms_now();
@@ -312,18 +356,17 @@ void agent_runtime::handle_channel_message(const envelope& message) {
   if (is_command_expired(*cmd, checked_at_ms)) {
     nlohmann::json result = {
         {"ok", false},
-        {"error_code", "COMMAND_EXPIRED"},
+        {"error_code", "command_expired"},
         {"message", "command expired before execution"},
         {"expires_at_ms", cmd->expires_at_ms},
         {"checked_at_ms", checked_at_ms},
     };
-    const auto result_json = result.dump();
     if (!send_command_result(
             message.trace_id,
             cmd->command_id,
             command_status::timed_out,
             -1,
-            result_json)) {
+            result)) {
       log::warn("send expired command result failed: command_id={}", cmd->command_id);
     }
     log::warn(
@@ -337,14 +380,7 @@ void agent_runtime::handle_channel_message(const envelope& message) {
 }
 
 void agent_runtime::execute_command(const std::string& trace_id, const command& cmd) {
-  nlohmann::json payload = nlohmann::json::object();
-  if (!cmd.payload_json.empty()) {
-    try {
-      payload = nlohmann::json::parse(cmd.payload_json);
-    } catch (const std::exception&) {
-      payload = nlohmann::json::object();
-    }
-  }
+  nlohmann::json payload = cmd.payload;
   if (!payload.is_object()) {
     payload = nlohmann::json::object();
   }
@@ -357,9 +393,9 @@ void agent_runtime::execute_command(const std::string& trace_id, const command& 
     case command_type::wol_wake: {
       auto params = service::load_control_params();
       service::wakeonlan_request req;
-      req.mac = payload.value("mac", params.wol.mac);
-      req.broadcast_ip = payload.value("broadcast", params.wol.broadcast);
-      req.port = payload.value("port", params.wol.port);
+      req.mac = payload_value_or<std::string>(payload, "mac", params.wol.mac);
+      req.broadcast_ip = payload_value_or<std::string>(payload, "broadcast", params.wol.broadcast);
+      req.port = payload_value_or<int>(payload, "port", params.wol.port);
 
       const auto res = service::send_magic_packet(req);
       if (res.ok) {
@@ -384,11 +420,11 @@ void agent_runtime::execute_command(const std::string& trace_id, const command& 
     case command_type::host_poweroff: {
       auto params = service::load_control_params();
       service::ssh_request req;
-      req.host = payload.value("host", params.ssh.host);
-      req.port = payload.value("port", params.ssh.port);
-      req.user = payload.value("user", params.ssh.user);
-      req.password = payload.value("password", params.ssh.password);
-      req.timeout_ms = payload.value("timeout_ms", params.ssh.timeout_ms);
+      req.host = payload_value_or<std::string>(payload, "host", params.ssh.host);
+      req.port = payload_value_or<int>(payload, "port", params.ssh.port);
+      req.user = payload_value_or<std::string>(payload, "user", params.ssh.user);
+      req.password = payload_value_or<std::string>(payload, "password", params.ssh.password);
+      req.timeout_ms = payload_value_or<int>(payload, "timeout_ms", params.ssh.timeout_ms);
       req.command = (cmd.type == command_type::host_reboot) ? "reboot" : "poweroff";
 
       const auto res = service::run_ssh_command(req);
@@ -489,8 +525,7 @@ void agent_runtime::execute_command(const std::string& trace_id, const command& 
     }
   }
 
-  const auto result_json = result.dump();
-  send_command_result(trace_id, cmd.command_id, final_status, exit_code, result_json);
+  send_command_result(trace_id, cmd.command_id, final_status, exit_code, result);
 }
 
 bool agent_runtime::send_command_result(
@@ -498,7 +533,7 @@ bool agent_runtime::send_command_result(
     const std::string& command_id,
     command_status final_status,
     int exit_code,
-    const std::string& result_json) {
+    const nlohmann::json& result) {
   auto* ch = wss_channel_.get();
   if (ch == nullptr || !ch->is_running()) {
     log::warn("send command result skipped: channel unavailable");
@@ -506,13 +541,12 @@ bool agent_runtime::send_command_result(
   }
 
   envelope message;
-  message.message_id = make_message_id();
   message.type = message_type::command_result;
   message.protocol_version = options_.protocol_version;
   message.sent_at_ms = unix_time_ms_now();
   message.trace_id = trace_id;
   message.agent_id = options_.agent_id;
-  message.payload = command_result_payload{command_id, final_status, exit_code, result_json};
+  message.payload = command_result_payload{command_id, final_status, exit_code, result};
   return ch->send(message);
 }
 
@@ -536,7 +570,33 @@ void agent_runtime::execution_loop() {
       item = std::move(queue_.front());
       queue_.pop_front();
     }
-    execute_command(item.trace_id, item.cmd);
+    try {
+      execute_command(item.trace_id, item.cmd);
+    } catch (const std::exception& ex) {
+      log::error("execute command failed with exception: command_id={}, err={}", item.cmd.command_id, ex.what());
+      nlohmann::json result = {
+          {"ok", false},
+          {"error_code", "internal_error"},
+          {"message", "command execution exception"},
+      };
+      result["detail"] = ex.what();
+      if (!send_command_result(item.trace_id, item.cmd.command_id, command_status::failed, -1, result)) {
+        log::warn(
+            "send command result after exception failed: command_id={}", item.cmd.command_id);
+      }
+    } catch (...) {
+      log::error("execute command failed with unknown exception: command_id={}", item.cmd.command_id);
+      nlohmann::json result = {
+          {"ok", false},
+          {"error_code", "internal_error"},
+          {"message", "command execution exception"},
+          {"detail", "unknown exception"},
+      };
+      if (!send_command_result(item.trace_id, item.cmd.command_id, command_status::failed, -1, result)) {
+        log::warn(
+            "send command result after unknown exception failed: command_id={}", item.cmd.command_id);
+      }
+    }
   }
 }
 

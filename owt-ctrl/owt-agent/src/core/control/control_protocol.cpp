@@ -8,62 +8,62 @@ namespace control {
 namespace {
 
 std::atomic<uint64_t> g_message_counter{0};
-constexpr const char* kCurrentProtocolVersion = "v1.0-draft";
+constexpr const char* kCurrentProtocolVersion = "v3";
 
 } // namespace
 
 std::string to_string(message_type value) {
   switch (value) {
     case message_type::register_agent:
-      return "REGISTER";
+      return "register";
     case message_type::register_ack:
-      return "REGISTER_ACK";
+      return "register_ack";
     case message_type::heartbeat:
-      return "HEARTBEAT";
+      return "heartbeat";
     case message_type::heartbeat_ack:
-      return "HEARTBEAT_ACK";
+      return "heartbeat_ack";
     case message_type::command_push:
-      return "COMMAND_PUSH";
+      return "command_push";
     case message_type::command_ack:
-      return "COMMAND_ACK";
+      return "command_ack";
     case message_type::command_result:
-      return "COMMAND_RESULT";
+      return "command_result";
     case message_type::error:
-      return "ERROR";
+      return "error";
   }
-  return "UNKNOWN";
+  return "unknown";
 }
 
 bool try_parse_message_type(const std::string& text, message_type& out) {
-  if (text == "REGISTER") {
+  if (text == "register" || text == "REGISTER") {
     out = message_type::register_agent;
     return true;
   }
-  if (text == "REGISTER_ACK") {
+  if (text == "register_ack" || text == "REGISTER_ACK") {
     out = message_type::register_ack;
     return true;
   }
-  if (text == "HEARTBEAT") {
+  if (text == "heartbeat" || text == "HEARTBEAT") {
     out = message_type::heartbeat;
     return true;
   }
-  if (text == "HEARTBEAT_ACK") {
+  if (text == "heartbeat_ack" || text == "HEARTBEAT_ACK") {
     out = message_type::heartbeat_ack;
     return true;
   }
-  if (text == "COMMAND_PUSH") {
+  if (text == "command_push" || text == "COMMAND_PUSH") {
     out = message_type::command_push;
     return true;
   }
-  if (text == "COMMAND_ACK") {
+  if (text == "command_ack" || text == "COMMAND_ACK") {
     out = message_type::command_ack;
     return true;
   }
-  if (text == "COMMAND_RESULT") {
+  if (text == "command_result" || text == "COMMAND_RESULT") {
     out = message_type::command_result;
     return true;
   }
-  if (text == "ERROR") {
+  if (text == "error" || text == "ERROR") {
     out = message_type::error;
     return true;
   }
@@ -73,49 +73,49 @@ bool try_parse_message_type(const std::string& text, message_type& out) {
 std::string to_string(command_type value) {
   switch (value) {
     case command_type::wol_wake:
-      return "WOL_WAKE";
+      return "wol_wake";
     case command_type::host_reboot:
-      return "HOST_REBOOT";
+      return "host_reboot";
     case command_type::host_poweroff:
-      return "HOST_POWEROFF";
+      return "host_poweroff";
     case command_type::host_probe_get:
-      return "HOST_PROBE_GET";
+      return "host_probe_get";
     case command_type::monitoring_set:
-      return "MONITORING_SET";
+      return "monitoring_set";
     case command_type::params_get:
-      return "PARAMS_GET";
+      return "params_get";
     case command_type::params_set:
-      return "PARAMS_SET";
+      return "params_set";
   }
-  return "UNKNOWN";
+  return "unknown";
 }
 
 bool try_parse_command_type(const std::string& text, command_type& out) {
-  if (text == "WOL_WAKE") {
+  if (text == "wol_wake" || text == "WOL_WAKE") {
     out = command_type::wol_wake;
     return true;
   }
-  if (text == "HOST_REBOOT") {
+  if (text == "host_reboot" || text == "HOST_REBOOT") {
     out = command_type::host_reboot;
     return true;
   }
-  if (text == "HOST_POWEROFF") {
+  if (text == "host_poweroff" || text == "HOST_POWEROFF") {
     out = command_type::host_poweroff;
     return true;
   }
-  if (text == "HOST_PROBE_GET") {
+  if (text == "host_probe_get" || text == "HOST_PROBE_GET") {
     out = command_type::host_probe_get;
     return true;
   }
-  if (text == "MONITORING_SET") {
+  if (text == "monitoring_set" || text == "MONITORING_SET") {
     out = command_type::monitoring_set;
     return true;
   }
-  if (text == "PARAMS_GET") {
+  if (text == "params_get" || text == "PARAMS_GET") {
     out = command_type::params_get;
     return true;
   }
-  if (text == "PARAMS_SET") {
+  if (text == "params_set" || text == "PARAMS_SET") {
     out = command_type::params_set;
     return true;
   }
@@ -125,55 +125,61 @@ bool try_parse_command_type(const std::string& text, command_type& out) {
 std::string to_string(command_status value) {
   switch (value) {
     case command_status::created:
-      return "CREATED";
+      return "created";
     case command_status::dispatched:
-      return "DISPATCHED";
+      return "dispatched";
     case command_status::acked:
-      return "ACKED";
+      return "acked";
     case command_status::running:
-      return "RUNNING";
+      return "running";
+    case command_status::retry_pending:
+      return "retry_pending";
     case command_status::succeeded:
-      return "SUCCEEDED";
+      return "succeeded";
     case command_status::failed:
-      return "FAILED";
+      return "failed";
     case command_status::timed_out:
-      return "TIMED_OUT";
+      return "timed_out";
     case command_status::cancelled:
-      return "CANCELLED";
+      return "cancelled";
   }
-  return "UNKNOWN";
+  return "unknown";
 }
 
 bool try_parse_command_status(const std::string& text, command_status& out) {
-  if (text == "CREATED") {
+  if (text == "created" || text == "CREATED") {
     out = command_status::created;
     return true;
   }
-  if (text == "DISPATCHED") {
+  if (text == "dispatched" || text == "DISPATCHED") {
     out = command_status::dispatched;
     return true;
   }
-  if (text == "ACKED") {
+  if (text == "acked" || text == "ACKED") {
     out = command_status::acked;
     return true;
   }
-  if (text == "RUNNING") {
+  if (text == "running" || text == "RUNNING") {
     out = command_status::running;
     return true;
   }
-  if (text == "SUCCEEDED") {
+  if (text == "retry_pending" || text == "RETRY_PENDING") {
+    out = command_status::retry_pending;
+    return true;
+  }
+  if (text == "succeeded" || text == "SUCCEEDED") {
     out = command_status::succeeded;
     return true;
   }
-  if (text == "FAILED") {
+  if (text == "failed" || text == "FAILED") {
     out = command_status::failed;
     return true;
   }
-  if (text == "TIMED_OUT") {
+  if (text == "timed_out" || text == "TIMED_OUT") {
     out = command_status::timed_out;
     return true;
   }
-  if (text == "CANCELLED") {
+  if (text == "cancelled" || text == "CANCELLED") {
     out = command_status::cancelled;
     return true;
   }

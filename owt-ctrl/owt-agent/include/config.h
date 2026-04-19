@@ -6,9 +6,11 @@ namespace owt_agent {
 
 struct AgentConfig {
   std::string agent_id = "agent-local";
-  std::string protocol_version = "v1.0-draft";
-
-  std::string wss_endpoint = "wss://owt.wzhex.com/ws/control";
+  std::string agent_mac = "auto";
+  std::string protocol_version = "v3";
+  std::string wss_endpoint = "wss://owt.wzhex.com/ws/v3/agent";
+  int heartbeat_interval_ms = 10000;
+  int status_collect_interval_ms = 1000;
 };
 
 struct Config {

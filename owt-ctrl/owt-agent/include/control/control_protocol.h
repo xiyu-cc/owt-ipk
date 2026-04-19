@@ -1,5 +1,7 @@
 #pragma once
 
+#include <nlohmann/json.hpp>
+
 #include <cstdint>
 #include <string>
 #include <variant>
@@ -33,6 +35,7 @@ enum class command_status {
   dispatched,
   acked,
   running,
+  retry_pending,
   succeeded,
   failed,
   timed_out,
@@ -53,6 +56,7 @@ int64_t unix_time_ms_now();
 std::string make_message_id();
 
 struct register_payload {
+  std::string agent_mac;
   std::string agent_id;
   std::string site_id;
   std::string agent_version;
@@ -61,7 +65,7 @@ struct register_payload {
 
 struct heartbeat_payload {
   int64_t heartbeat_at_ms = 0;
-  std::string stats_json;
+  nlohmann::json stats = nlohmann::json::object();
 };
 
 struct register_ack_payload {
@@ -81,7 +85,7 @@ struct command {
   int64_t expires_at_ms = 0;
   int timeout_ms = 0;
   int max_retry = 0;
-  std::string payload_json;
+  nlohmann::json payload = nlohmann::json::object();
 };
 
 struct command_ack_payload {
@@ -94,7 +98,7 @@ struct command_result_payload {
   std::string command_id;
   command_status final_status = command_status::failed;
   int exit_code = 0;
-  std::string result_json;
+  nlohmann::json result = nlohmann::json::object();
 };
 
 struct error_payload {
@@ -115,9 +119,8 @@ using payload_variant = std::variant<
     error_payload>;
 
 struct envelope {
-  std::string message_id;
   message_type type = message_type::heartbeat;
-  std::string protocol_version = "v1.0-draft";
+  std::string protocol_version = "v3";
   int64_t sent_at_ms = 0;
   std::string trace_id;
   std::string agent_id;

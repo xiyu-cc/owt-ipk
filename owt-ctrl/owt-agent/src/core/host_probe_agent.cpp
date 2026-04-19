@@ -18,7 +18,9 @@ namespace service {
 
 namespace {
 
-constexpr auto kProbeInterval = std::chrono::seconds(1);
+constexpr int kDefaultProbeIntervalMs = 1000;
+constexpr int kMinProbeIntervalMs = 200;
+constexpr int kMaxProbeIntervalMs = 60000;
 constexpr const char* kProbeCommand =
     "sh -c \"echo __OWT_CPU__ $(sed -n '1p' /proc/stat); "
     "echo __OWT_MEM_TOTAL__ $(awk '/^MemTotal:/ {print $2}' /proc/meminfo); "
@@ -29,6 +31,7 @@ std::mutex g_probe_mutex;
 std::condition_variable g_probe_cv;
 bool g_probe_running = false;
 bool g_probe_enabled = true;
+std::chrono::milliseconds g_probe_interval{kDefaultProbeIntervalMs};
 std::thread g_probe_thread;
 host_probe_snapshot g_snapshot;
 
@@ -304,12 +307,14 @@ void probe_loop() {
 
   while (true) {
     bool enabled = false;
+    std::chrono::milliseconds probe_interval{kDefaultProbeIntervalMs};
     {
       std::lock_guard<std::mutex> lk(g_probe_mutex);
       if (!g_probe_running) {
         break;
       }
       enabled = g_probe_enabled;
+      probe_interval = g_probe_interval;
     }
 
     const auto params = load_control_params();
@@ -349,7 +354,7 @@ void probe_loop() {
     }
 
     std::unique_lock<std::mutex> lk(g_probe_mutex);
-    if (g_probe_cv.wait_for(lk, kProbeInterval, []() { return !g_probe_running; })) {
+    if (g_probe_cv.wait_for(lk, probe_interval, []() { return !g_probe_running; })) {
       break;
     }
   }
@@ -357,11 +362,14 @@ void probe_loop() {
 
 } // namespace
 
-void start_host_probe_agent() {
+void start_host_probe_agent(int status_collect_interval_ms) {
   std::lock_guard<std::mutex> lk(g_probe_mutex);
   if (g_probe_running) {
     return;
   }
+  const int bounded_status_collect_interval_ms =
+      std::max(kMinProbeIntervalMs, std::min(status_collect_interval_ms, kMaxProbeIntervalMs));
+  g_probe_interval = std::chrono::milliseconds(bounded_status_collect_interval_ms);
   g_probe_running = true;
   g_probe_enabled = true;
   g_snapshot.status = "unknown";

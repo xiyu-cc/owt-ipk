@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OWT_IPK_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 OWT_OUT_ROOT="$(cd "${OWT_IPK_ROOT}/.." && pwd)/owt-out"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 PRESET="${1:-gcc-release}"
 OUT_DIR_INPUT="${2:-${OWT_OUT_ROOT}}"
@@ -109,12 +110,10 @@ fetch_oauth2_proxy_binary() {
 
 case "${PRESET}" in
   gcc-release) BUILD_DIR="${OWT_OUT_ROOT}/owt-ctrl/owt-net/build/gcc-release" ;;
-  gcc-debug) BUILD_DIR="${OWT_OUT_ROOT}/owt-ctrl/owt-net/build/gcc-debug" ;;
   clang-libcxx-release) BUILD_DIR="${OWT_OUT_ROOT}/owt-ctrl/owt-net/build/clang-libcxx-release" ;;
-  clang-libcxx-debug) BUILD_DIR="${OWT_OUT_ROOT}/owt-ctrl/owt-net/build/clang-libcxx-debug" ;;
   *)
     echo "unsupported preset: ${PRESET}" >&2
-    echo "supported presets: gcc-debug, gcc-release, clang-libcxx-debug, clang-libcxx-release" >&2
+    echo "supported presets: gcc-release, clang-libcxx-release" >&2
     exit 1
     ;;
 esac
@@ -122,7 +121,13 @@ esac
 OAUTH2_PROXY_BIN="$(fetch_oauth2_proxy_binary)"
 echo "using oauth2-proxy binary: ${OAUTH2_PROXY_BIN}"
 
-pushd "${SCRIPT_DIR}/../.." >/dev/null
+echo "[clean] Purge old deb artifacts and full-build cache"
+find "${OUT_DIR}" -maxdepth 1 -type f -name '*.deb' -delete 2>/dev/null || true
+find "${PROJECT_ROOT}" -maxdepth 1 -type f -name '*.deb' -delete 2>/dev/null || true
+rm -rf "${BUILD_DIR}"
+
+pushd "${PROJECT_ROOT}" >/dev/null
+rm -rf frontend/dist
 if [[ ! -d frontend/node_modules ]]; then
   (cd frontend && npm ci)
 fi

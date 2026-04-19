@@ -1,0 +1,78 @@
+#include "app/ws/agent_protocol.h"
+#include "json_field_validation.h"
+
+namespace app::ws {
+
+bool parse_agent_envelope(std::string_view text, AgentEnvelope& out, std::string& error) {
+  auto root = nlohmann::json::parse(text, nullptr, false);
+  if (!root.is_object()) {
+    error = "json root must be object";
+    return false;
+  }
+
+  std::string unknown;
+  if (!detail::reject_unknown_fields(root, {"type", "meta", "payload"}, unknown)) {
+    error = "unknown field in envelope: " + unknown;
+    return false;
+  }
+
+  if (!root.contains("type") || !root["type"].is_string() ||
+      root["type"].get<std::string>().empty()) {
+    error = "type is required";
+    return false;
+  }
+  if (!root.contains("meta") || !root["meta"].is_object()) {
+    error = "meta is required";
+    return false;
+  }
+  if (!root.contains("payload") || !root["payload"].is_object()) {
+    error = "payload is required";
+    return false;
+  }
+
+  const auto& meta = root["meta"];
+  if (!detail::reject_unknown_fields(meta, {"version", "trace_id", "ts_ms", "agent_id"}, unknown)) {
+    error = "unknown field in meta: " + unknown;
+    return false;
+  }
+  if (!meta.contains("version") || !meta["version"].is_string() ||
+      meta["version"].get<std::string>().empty()) {
+    error = "meta.version is required";
+    return false;
+  }
+  if (!meta.contains("trace_id") || !meta["trace_id"].is_string() ||
+      meta["trace_id"].get<std::string>().empty()) {
+    error = "meta.trace_id is required";
+    return false;
+  }
+  if (!meta.contains("ts_ms") || !meta["ts_ms"].is_number_integer()) {
+    error = "meta.ts_ms is required";
+    return false;
+  }
+
+  out.type = root["type"].get<std::string>();
+  out.meta.version = meta["version"].get<std::string>();
+  out.meta.trace_id = meta["trace_id"].get<std::string>();
+  out.meta.ts_ms = meta["ts_ms"].get<int64_t>();
+  out.meta.agent_id = meta.value("agent_id", std::string{});
+  out.payload = root["payload"];
+  error.clear();
+  return true;
+}
+
+std::string encode_agent_envelope(const AgentEnvelope& envelope) {
+  return nlohmann::json{
+      {"type", envelope.type},
+      {"meta",
+       {
+           {"version", envelope.meta.version},
+           {"trace_id", envelope.meta.trace_id},
+           {"ts_ms", envelope.meta.ts_ms},
+           {"agent_id", envelope.meta.agent_id},
+       }},
+      {"payload", envelope.payload},
+  }
+      .dump();
+}
+
+} // namespace app::ws
