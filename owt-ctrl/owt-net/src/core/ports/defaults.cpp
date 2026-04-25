@@ -23,46 +23,4 @@ std::string DefaultIdGenerator::next_trace_id(std::string_view command_id) {
   return "trc-" + std::string(command_id);
 }
 
-void NullStatusPublisher::publish_snapshot(std::string_view reason, std::string_view agent_mac) {
-  (void)reason;
-  (void)agent_mac;
-}
-
-void NullStatusPublisher::publish_agent(std::string_view reason, std::string_view agent_mac) {
-  (void)reason;
-  (void)agent_mac;
-}
-
-void NullMetrics::record_rate_limited(std::string_view actor_id, int64_t retry_after_ms) {
-  (void)actor_id;
-  (void)retry_after_ms;
-}
-
-void NullMetrics::record_command_push() {}
-
-void NullMetrics::record_command_retry(
-    std::string_view command_id,
-    int retry_count,
-    std::string_view reason) {
-  (void)command_id;
-  (void)retry_count;
-  (void)reason;
-}
-
-void NullMetrics::record_command_retry_exhausted(
-    std::string_view command_id,
-    std::string_view reason) {
-  (void)command_id;
-  (void)reason;
-}
-
-void NullMetrics::record_command_terminal_status(
-    std::string_view command_id,
-    domain::CommandState state,
-    const nlohmann::json& detail) {
-  (void)command_id;
-  (void)state;
-  (void)detail;
-}
-
 } // namespace ctrl::ports

@@ -1,5 +1,4 @@
 export const WS_UI_PATH = '/ws/v5/ui'
-export const WS_AGENT_PATH = '/ws/v5/agent'
 export const BUS_VERSION = 'v5'
 
 export const BUS_KINDS = Object.freeze({

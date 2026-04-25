@@ -729,6 +729,15 @@ void test_agent_message_terminal_once() {
   require(command_repo.get("cmd-ack-result", row, error), "command should exist");
   require(row.state == ctrl::domain::CommandState::Acked, "ack should update state");
 
+  service.on_command_ack(
+      "AA:00:00:00:20:01",
+      "cmd-ack-result",
+      ctrl::domain::CommandState::Running,
+      "trc-ack-result",
+      "running");
+  require(command_repo.get("cmd-ack-result", row, error), "command should exist");
+  require(row.state == ctrl::domain::CommandState::Running, "running ack should update state");
+
   service.on_command_result(
       "AA:00:00:00:20:01",
       "cmd-ack-result",
@@ -1202,6 +1211,43 @@ void test_sqlite_store_repository() {
   std::filesystem::remove(db_path);
 }
 
+void test_startup_mark_all_agents_offline() {
+  const auto unique = std::to_string(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+  const auto db_path = std::filesystem::path("/tmp") / ("owt-net-startup-offline-" + unique + ".db");
+  std::filesystem::remove(db_path);
+
+  ctrl::infrastructure::SqliteStore store(db_path.string());
+  store.migrate();
+
+  std::string error;
+  ctrl::domain::AgentState online_agent;
+  online_agent.agent = {"AA:00:00:00:71:01", "agent-71-01"};
+  online_agent.online = true;
+  online_agent.site_id = "lab-71";
+  online_agent.version = "test";
+  online_agent.registered_at_ms = 7100;
+  online_agent.last_seen_at_ms = 7100;
+  online_agent.last_heartbeat_at_ms = 7100;
+  require(store.upsert(online_agent, error), "seed online agent should succeed");
+
+  const int64_t startup_now_ms = 8123;
+  require(
+      store.mark_all_offline(startup_now_ms, error),
+      "startup mark_all_offline should succeed");
+
+  ctrl::domain::AgentState loaded;
+  require(store.get(online_agent.agent.mac, loaded, error), "offline-reset agent should be readable");
+  require(!loaded.online, "agent should be forced offline on startup");
+  require(
+      loaded.last_seen_at_ms == startup_now_ms,
+      "startup offline reset should refresh last_seen_at_ms");
+
+  std::filesystem::remove(db_path);
+}
+
 void test_sqlite_store_legacy_backup_and_rebuild() {
   const auto unique = std::to_string(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -1409,6 +1455,7 @@ int main() {
     test_presenter_command_redaction();
     test_control_ws_use_cases_v5_contract();
     test_sqlite_store_repository();
+    test_startup_mark_all_agents_offline();
     test_sqlite_store_legacy_backup_and_rebuild();
     test_ws_event_scheduler_partition_fifo();
     test_ws_event_scheduler_backpressure_policy();

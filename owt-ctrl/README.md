@@ -173,6 +173,17 @@
 OPENWRT_SDK_DIR=/path/to/openwrt-sdk-xxx ./build-release.sh
 ```
 
+## owt-agent SSH 构建策略
+
+- `owt-agent` 提供两个 CMake 开关：
+  - `OWT_AGENT_REQUIRE_LIBSSH2`：开启后，若缺少 `libssh2` 头文件或库，配置阶段直接失败。
+  - `OWT_AGENT_ALLOW_SSH_STUB`：开启后，允许在缺少 `libssh2` 时编译 SSH stub（仅用于本地开发）。
+- 发布路径已固定强约束：
+  - `build-release.sh` 触发的 OpenWrt `ipk` 构建，统一使用 `OWT_AGENT_REQUIRE_LIBSSH2=ON` 且 `OWT_AGENT_ALLOW_SSH_STUB=OFF`。
+  - 发布构建缺少 `libssh2` 时必须失败，不允许回退到 stub。
+- 本地开发默认行为：
+  - 允许 stub（可编译、会有告警），便于无交叉依赖环境下调试其它功能。
+
 ## owt-agent 配置
 
 默认配置文件位于：

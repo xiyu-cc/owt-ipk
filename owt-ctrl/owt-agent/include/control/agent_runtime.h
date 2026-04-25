@@ -1,19 +1,16 @@
 #pragma once
 
+#include "control/agent_command_executor_registry.h"
+#include "control/agent_runtime_execution_worker.h"
+#include "control/agent_runtime_heartbeat_builder.h"
+#include "control/agent_runtime_message_router.h"
 #include "control/runtime_event_dispatcher.h"
 #include "control/wss_control_channel.h"
 
-#include <nlohmann/json.hpp>
-
 #include <atomic>
-#include <condition_variable>
-#include <deque>
-#include <functional>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <unordered_set>
 
 namespace control {
@@ -31,6 +28,11 @@ struct agent_runtime_options {
 class agent_runtime {
 public:
   agent_runtime();
+  explicit agent_runtime(std::unique_ptr<i_control_channel> channel);
+  agent_runtime(
+      std::unique_ptr<i_control_channel> channel,
+      std::shared_ptr<agent_command_executor_registry> executor_registry,
+      agent_runtime_heartbeat_builder heartbeat_builder);
   ~agent_runtime();
 
   bool start(const agent_runtime_options& options);
@@ -40,16 +42,9 @@ public:
   bool send_register();
   bool send_heartbeat();
 
+  void register_command_executor(command_type type, command_executor executor);
+
 private:
-  struct command_execution_result {
-    command_status status = command_status::failed;
-    int exit_code = -1;
-    nlohmann::json result = nlohmann::json::object();
-  };
-
-  using command_executor = std::function<command_execution_result(const command&, const nlohmann::json&)>;
-
-  void install_command_executors();
   bool send_command_ack(
       const nlohmann::json& request_id,
       const std::string& command_id,
@@ -64,6 +59,10 @@ private:
   bool mark_command_seen(const std::string& command_id);
   void handle_channel_message(const envelope& message);
   void execute_command(const nlohmann::json& request_id, const command& cmd);
+  void on_execute_exception(
+      const nlohmann::json& request_id,
+      const command& cmd,
+      std::exception_ptr exception_ptr);
   bool send_command_result(
       const nlohmann::json& request_id,
       const std::string& command_id,
@@ -71,26 +70,20 @@ private:
       int exit_code,
       const nlohmann::json& result);
   void enqueue_command(const nlohmann::json& request_id, const command& cmd);
-  void execution_loop();
-
-  struct queued_command {
-    nlohmann::json request_id = nullptr;
-    command cmd;
-  };
 
 private:
   std::unique_ptr<i_control_channel> wss_channel_;
+  std::shared_ptr<agent_command_executor_registry> executor_registry_;
+  agent_runtime_heartbeat_builder heartbeat_builder_;
+  agent_runtime_message_router message_router_;
+
   agent_runtime_options options_{};
   std::atomic<bool> running_{false};
   std::mutex seen_commands_mutex_;
   std::unordered_set<std::string> seen_command_ids_;
-  std::mutex queue_mutex_;
-  std::condition_variable queue_cv_;
-  std::deque<queued_command> queue_;
-  std::map<command_type, command_executor> command_executors_;
+
   runtime_event_dispatcher event_dispatcher_;
-  bool execution_stop_ = false;
-  std::thread execution_thread_;
+  agent_runtime_execution_worker execution_worker_;
 };
 
 } // namespace control

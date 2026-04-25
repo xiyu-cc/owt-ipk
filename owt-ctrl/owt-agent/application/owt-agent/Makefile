@@ -17,7 +17,7 @@ define Package/$(PKG_NAME)
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=OWT gateway execution agent
-  DEPENDS:=+libstdcpp +libssh2 +libopenssl +zlib +libuuid
+  DEPENDS:=+libstdcpp +libssh2 +libopenssl
 endef
 
 define Package/$(PKG_NAME)/description
@@ -52,6 +52,8 @@ define Build/Compile
 			-DCMAKE_EXE_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
 			-DCMAKE_SHARED_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
 			-DCMAKE_MODULE_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
+			-DOWT_AGENT_REQUIRE_LIBSSH2=ON \
+			-DOWT_AGENT_ALLOW_SSH_STUB=OFF \
 			-DUUID_DIR="$(STAGING_DIR)/usr" \
 			-DUUID_INCLUDE_DIR="$(STAGING_DIR)/usr/include/uuid" \
 			-DUUID_LIBRARY="$(STAGING_DIR)/usr/lib/libuuid.so" \

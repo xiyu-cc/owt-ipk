@@ -134,6 +134,9 @@ add_executable(${OWT_NET_TARGET}
   src/app/config.cpp
   src/app/runtime.cpp
   src/app/bootstrap/runtime_impl.cpp
+  src/app/bootstrap/runtime/runtime_composition.cpp
+  src/app/bootstrap/runtime/ws_envelope_validator.cpp
+  src/app/bootstrap/runtime/ws_endpoints.cpp
   src/app/bootstrap/runtime/session_runtime.cpp
   src/app/bootstrap/runtime/ui_action_gateway.cpp
   src/app/bootstrap/runtime/agent_action_gateway.cpp

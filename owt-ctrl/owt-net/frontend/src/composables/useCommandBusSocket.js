@@ -4,7 +4,7 @@ import {
   BUS_VERSION,
   COMMAND_BUS_ERROR_CODES,
   WS_UI_PATH
-} from '../protocol/v5'
+} from '../protocol/v5.js'
 
 function buildWsUrl(path) {
   const base = new URL(window.location.href)
@@ -185,23 +185,6 @@ export function useCommandBusSocket(path = WS_UI_PATH) {
     })
   }
 
-  function notify(name, payload = {}) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      return false
-    }
-    ws.send(
-      JSON.stringify({
-        v: BUS_VERSION,
-        kind: BUS_KINDS.ACTION,
-        name,
-        id: null,
-        ts_ms: nowMs(),
-        payload: payload && typeof payload === 'object' ? payload : {}
-      })
-    )
-    return true
-  }
-
   function on(name, cb) {
     if (!handlers.has(name)) {
       handlers.set(name, new Set())
@@ -223,7 +206,6 @@ export function useCommandBusSocket(path = WS_UI_PATH) {
     connect,
     close,
     call,
-    notify,
     on
   }
 }
