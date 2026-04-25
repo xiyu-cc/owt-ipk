@@ -8,6 +8,7 @@
 
 #include <string>
 #include <string_view>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -54,6 +55,7 @@ public:
 private:
   application::AgentRegistryService& registry_;
   application::AgentMessageService& messages_;
+  mutable std::mutex mutex_;
   std::unordered_map<std::string, std::string> session_agents_;
 };
 

@@ -53,6 +53,8 @@ fi
 OWT_AGENT_REPO_PKG_DIR="${SCRIPT_DIR}/owt-agent/application/owt-agent"
 OWT_AGENT_REPO_ROOT="${SCRIPT_DIR}/owt-agent"
 cp -f "${OWT_AGENT_REPO_PKG_DIR}/Makefile" "${OWT_AGENT_PKG_DIR}/Makefile"
+cp -f "${OWT_AGENT_REPO_PKG_DIR}/CMakeLists.txt" "${OWT_AGENT_PKG_DIR}/CMakeLists.txt"
+rsync -a --delete "${OWT_AGENT_REPO_PKG_DIR}/cmake/" "${OWT_AGENT_PKG_DIR}/cmake/"
 mkdir -p "${OWT_AGENT_PKG_DIR}/files"
 rsync -a --delete "${OWT_AGENT_REPO_PKG_DIR}/files/" "${OWT_AGENT_PKG_DIR}/files/"
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "control/runtime_event_dispatcher.h"
 #include "control/wss_control_channel.h"
 
 #include <nlohmann/json.hpp>
@@ -20,9 +21,11 @@ namespace control {
 struct agent_runtime_options {
   std::string agent_id = "agent-local";
   std::string agent_mac = "";
-  std::string protocol_version = "v4";
+  std::string protocol_version = "v5";
 
-  std::string wss_endpoint = "wss://owt.wzhex.com/ws/v4/agent";
+  std::string wss_endpoint = "wss://owt.wzhex.com/ws/v5/agent";
+  int ws_event_workers = 2;
+  int ws_event_queue_capacity = 4096;
 };
 
 class agent_runtime {
@@ -48,30 +51,30 @@ private:
 
   void install_command_executors();
   bool send_command_ack(
-      const std::string& trace_id,
+      const nlohmann::json& request_id,
       const std::string& command_id,
       command_status status,
       std::string_view message);
   bool send_control_message(
       message_type type,
-      const std::string& trace_id,
+      const nlohmann::json& request_id,
       payload_variant data);
   channel_callbacks build_callbacks(const std::string& endpoint);
   bool start_channel(i_control_channel& channel, const std::string& endpoint);
   bool mark_command_seen(const std::string& command_id);
   void handle_channel_message(const envelope& message);
-  void execute_command(const std::string& trace_id, const command& cmd);
+  void execute_command(const nlohmann::json& request_id, const command& cmd);
   bool send_command_result(
-      const std::string& trace_id,
+      const nlohmann::json& request_id,
       const std::string& command_id,
       command_status final_status,
       int exit_code,
       const nlohmann::json& result);
-  void enqueue_command(const std::string& trace_id, const command& cmd);
+  void enqueue_command(const nlohmann::json& request_id, const command& cmd);
   void execution_loop();
 
   struct queued_command {
-    std::string trace_id;
+    nlohmann::json request_id = nullptr;
     command cmd;
   };
 
@@ -85,6 +88,7 @@ private:
   std::condition_variable queue_cv_;
   std::deque<queued_command> queue_;
   std::map<command_type, command_executor> command_executors_;
+  runtime_event_dispatcher event_dispatcher_;
   bool execution_stop_ = false;
   std::thread execution_thread_;
 };

@@ -96,6 +96,31 @@ Config load_config(const std::string& path) {
         parse_int(value, cfg.server.retry_tick_ms);
       } else if (key == "retry_batch") {
         parse_int(value, cfg.server.retry_batch);
+      } else if (key == "ws_event_workers") {
+        int parsed = cfg.server.ws_event_workers;
+        if (parse_int(value, parsed)) {
+          cfg.server.ws_event_workers = std::max(0, std::min(parsed, 256));
+        }
+      } else if (key == "ws_event_queue_capacity") {
+        int parsed = cfg.server.ws_event_queue_capacity;
+        if (parse_int(value, parsed)) {
+          cfg.server.ws_event_queue_capacity = std::max(64, std::min(parsed, 1'000'000));
+        }
+      } else if (key == "ws_event_low_priority_drop_threshold_pct") {
+        int parsed = cfg.server.ws_event_low_priority_drop_threshold_pct;
+        if (parse_int(value, parsed)) {
+          cfg.server.ws_event_low_priority_drop_threshold_pct = std::max(1, std::min(parsed, 100));
+        }
+      } else if (key == "ui_event_send_timeout_ms") {
+        int parsed = cfg.server.ui_event_send_timeout_ms;
+        if (parse_int(value, parsed)) {
+          cfg.server.ui_event_send_timeout_ms = std::max(100, std::min(parsed, 60000));
+        }
+      } else if (key == "ui_session_queue_limit") {
+        int parsed = cfg.server.ui_session_queue_limit;
+        if (parse_int(value, parsed)) {
+          cfg.server.ui_session_queue_limit = std::max(32, std::min(parsed, 100000));
+        }
       }
       continue;
     }

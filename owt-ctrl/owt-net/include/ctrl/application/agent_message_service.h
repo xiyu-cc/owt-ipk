@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <string_view>
 
 namespace ctrl::application {
@@ -22,6 +23,10 @@ public:
       std::string_view agent_mac,
       std::string_view display_id,
       const nlohmann::json& meta);
+  void on_agent_heartbeat(
+      std::string_view agent_mac,
+      const nlohmann::json& heartbeat_stats,
+      int64_t heartbeat_at_ms);
   void on_command_ack(
       std::string_view agent_mac,
       std::string_view command_id,

@@ -1,5 +1,6 @@
-#include "app/ws/agent_protocol.h"
-#include "app/ws/jsonrpc_protocol.h"
+#include "app/ws/command_bus_protocol.h"
+#include "app/presenter/serializers.h"
+#include "app/ws/scheduler/event_scheduler.h"
 #include "ctrl/adapters/control_ws_use_cases.h"
 #include "ctrl/infrastructure/sqlite_store.h"
 #include "ctrl/domain/types.h"
@@ -12,13 +13,14 @@
 #include "ctrl/application/rate_limiter_service.h"
 #include "ctrl/application/redaction_service.h"
 #include "ctrl/application/retry_service.h"
-#include "owt/protocol/v4/contract.h"
+#include "owt/protocol/v5/contract.h"
 
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -28,6 +30,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -692,6 +695,19 @@ void test_agent_message_terminal_once() {
   ctrl::application::AgentRegistryService registry(agent_repo, clock);
   ctrl::application::AgentMessageService service(command_repo, registry, publisher, metrics, clock);
 
+  service.on_agent_registered(
+      "AA:00:00:00:20:01",
+      "agent-20-01",
+      nlohmann::json{{"agent_version", "0.2.0"}});
+  service.on_agent_heartbeat(
+      "AA:00:00:00:20:01",
+      nlohmann::json{{"cpu", 10}},
+      2010);
+  ctrl::domain::AgentState agent_state;
+  require(registry.get_agent("AA:00:00:00:20:01", agent_state), "registered agent should exist");
+  require(agent_state.stats["cpu"] == 10, "heartbeat stats should persist");
+  require(!publisher.agents_.empty(), "heartbeat should trigger agent update publishing");
+
   ctrl::domain::CommandSnapshot seed;
   seed.spec.command_id = "cmd-ack-result";
   seed.spec.trace_id = "trc-ack-result";
@@ -866,6 +882,42 @@ void test_params_rate_limiter_redaction() {
   require(redacted.find("abc") == std::string::npos, "token should be redacted");
 }
 
+void test_presenter_command_redaction() {
+  ctrl::domain::CommandSnapshot row;
+  row.spec.command_id = "cmd-redact";
+  row.spec.trace_id = "trc-redact";
+  row.spec.kind = ctrl::domain::CommandKind::HostReboot;
+  row.spec.payload = nlohmann::json{
+      {"ssh", {{"host", "10.0.0.2"}, {"password", "super-secret"}}},
+      {"token", "abcd"},
+  };
+  row.agent.mac = "AA:BB:CC:DD:EE:01";
+  row.agent.display_id = "agent-1";
+  row.state = ctrl::domain::CommandState::Failed;
+  row.result = nlohmann::json{
+      {"message", "failed"},
+      {"detail", {{"private_key", "-----BEGIN"}}},
+  };
+
+  const auto encoded = app::presenter::to_command_json(row);
+  require(encoded["payload"]["ssh"]["password"] == "***", "payload.password should be redacted");
+  require(encoded["payload"]["token"] == "***", "payload.token should be redacted");
+  require(encoded["result"]["detail"]["private_key"] == "***", "result.private_key should be redacted");
+
+  ctrl::domain::CommandEvent event;
+  event.command_id = row.spec.command_id;
+  event.type = "command_result_received";
+  event.state = ctrl::domain::CommandState::Failed;
+  event.detail = nlohmann::json{
+      {"error", "boom"},
+      {"secret", "top-secret"},
+  };
+  event.created_at_ms = 100;
+
+  const auto event_json = app::presenter::to_command_event_json(event);
+  require(event_json["detail"]["secret"] == "***", "event.detail.secret should be redacted");
+}
+
 void test_model_types_snake_case_mapping() {
   using ctrl::domain::CommandKind;
   using ctrl::domain::CommandState;
@@ -894,99 +946,60 @@ void test_model_types_snake_case_mapping() {
       "legacy uppercase command state parsing should still succeed");
 }
 
-void test_agent_envelope_v4_codec() {
-  app::ws::AgentEnvelope envelope;
-  envelope.type = std::string(owt::protocol::v4::agent::kTypeAgentHeartbeat);
-  envelope.meta.protocol = std::string(owt::protocol::v4::kProtocol);
-  envelope.meta.trace_id = "trc-1";
-  envelope.meta.ts_ms = 123456;
-  envelope.meta.agent_id = "agent-1";
-  envelope.data = nlohmann::json{{"heartbeat_at_ms", 123450}, {"stats", nlohmann::json::object()}};
+void test_command_bus_envelope_v5_codec() {
+  app::ws::BusEnvelope in;
+  in.version = std::string(owt::protocol::v5::kProtocol);
+  in.kind = std::string(owt::protocol::v5::kind::kAction);
+  in.name = std::string(owt::protocol::v5::ui::kActionCommandSubmit);
+  in.id = "req-1";
+  in.ts_ms = 123456;
+  in.payload = nlohmann::json{{"agent_mac", "AA:00:00:00:10:01"}, {"command_type", "host_probe_get"}};
+  in.target = "AA:00:00:00:10:01";
 
-  const auto encoded = app::ws::encode_agent_envelope(envelope);
-  app::ws::AgentEnvelope decoded;
+  const auto encoded = app::ws::encode_bus_envelope(in);
+  app::ws::BusEnvelope out;
   std::string error;
   require(
-      app::ws::parse_agent_envelope(encoded, decoded, error),
-      std::string("agent envelope roundtrip should parse: ") + error);
-  require(
-      decoded.type == owt::protocol::v4::agent::kTypeAgentHeartbeat,
-      "decoded type mismatch");
-  require(decoded.meta.protocol == "v4", "decoded protocol mismatch");
-  require(decoded.meta.trace_id == "trc-1", "decoded trace_id mismatch");
-  require(decoded.meta.agent_id == "agent-1", "decoded agent_id mismatch");
-  require(decoded.data["heartbeat_at_ms"].get<int64_t>() == 123450, "decoded data mismatch");
+      app::ws::parse_bus_envelope(encoded, out, error),
+      std::string("bus envelope roundtrip should parse: ") + error);
+  require(out.version == "v5", "decoded version mismatch");
+  require(out.kind == owt::protocol::v5::kind::kAction, "decoded kind mismatch");
+  require(out.name == owt::protocol::v5::ui::kActionCommandSubmit, "decoded name mismatch");
+  require(out.id.is_string() && out.id.get<std::string>() == "req-1", "decoded id mismatch");
+  require(out.payload["agent_mac"].get<std::string>() == "AA:00:00:00:10:01", "decoded payload mismatch");
+  require(out.target == "AA:00:00:00:10:01", "decoded target mismatch");
+
+  const auto result_text = app::ws::bus_result(
+      owt::protocol::v5::ui::kActionAgentList,
+      "req-2",
+      222,
+      nlohmann::json{{"ok", true}});
+  auto result_json = nlohmann::json::parse(result_text, nullptr, false);
+  require(result_json["kind"] == "result", "bus_result kind mismatch");
+  require(result_json["name"] == owt::protocol::v5::ui::kActionAgentList, "bus_result name mismatch");
+
+  const auto error_text = app::ws::bus_error(
+      owt::protocol::v5::ui::kActionParamsUpdate,
+      "req-3",
+      333,
+      owt::protocol::v5::error_code::kInvalidParams,
+      "invalid params",
+      nlohmann::json{{"field", "params"}});
+  auto error_json = nlohmann::json::parse(error_text, nullptr, false);
+  require(error_json["kind"] == "error", "bus_error kind mismatch");
+  require(error_json["payload"]["code"] == owt::protocol::v5::error_code::kInvalidParams, "bus_error code mismatch");
 
   std::string invalid_error;
-  app::ws::AgentEnvelope ignored;
+  app::ws::BusEnvelope ignored;
   require(
-      !app::ws::parse_agent_envelope(R"({"type":"heartbeat","data":{}})", ignored, invalid_error),
-      "missing meta should fail");
-  require(
-      !app::ws::parse_agent_envelope(
-          R"({"type":"heartbeat","meta":{"protocol":"v4","trace_id":"t","ts_ms":1},"data":{},"x":1})",
+      !app::ws::parse_bus_envelope(
+          R"({"v":"v5","kind":"action","name":"agent.list","id":"1","ts_ms":1,"payload":{},"x":1})",
           ignored,
           invalid_error),
       "unknown envelope field should fail");
 }
 
-void test_jsonrpc_request_validation() {
-  app::ws::JsonRpcRequest req;
-  std::string error;
-  int error_code = 0;
-
-  require(
-      app::ws::parse_jsonrpc_request(
-          R"({"jsonrpc":"2.0","id":"1","method":"agent.list","params":{"include_offline":true}})",
-          req,
-          error,
-          error_code),
-      std::string("valid jsonrpc request should parse: ") + error);
-  require(!req.notification, "request with id should not be notification");
-  require(req.method == "agent.list", "method parse mismatch");
-  require(req.params["include_offline"].get<bool>(), "params parse mismatch");
-
-  require(
-      !app::ws::parse_jsonrpc_request(
-          R"({"jsonrpc":"2.0","id":"1","method":"agent.list","extra":1})",
-          req,
-          error,
-          error_code),
-      "request with unknown field should fail");
-  require(error_code == -32600, "unknown field should map to invalid request");
-
-  require(
-      !app::ws::parse_jsonrpc_request(
-          R"({"jsonrpc":"2.0","id":"1","method":"agent.list","params":[1,2]})",
-          req,
-          error,
-          error_code),
-      "request with non-object params should fail");
-  require(error_code == -32602, "invalid params should map to -32602");
-
-  const auto result_text = app::ws::jsonrpc_result(
-      "1",
-      nlohmann::json{{"ok", true}},
-      nlohmann::json{{"reason", "test"}});
-  const auto result_json = nlohmann::json::parse(result_text, nullptr, false);
-  require(result_json.is_object(), "jsonrpc_result should return object json");
-  require(result_json.value("jsonrpc", "") == "2.0", "jsonrpc_result version mismatch");
-  require(result_json.contains("result"), "jsonrpc_result should contain result");
-  require(result_json["result"].contains("resource"), "jsonrpc_result should contain resource");
-  require(result_json["result"].contains("meta"), "jsonrpc_result should contain meta");
-
-  const auto error_text = app::ws::jsonrpc_error(
-      "1",
-      -32602,
-      "invalid params",
-      nlohmann::json{{"field", "params"}});
-  const auto error_json = nlohmann::json::parse(error_text, nullptr, false);
-  require(error_json.is_object(), "jsonrpc_error should return object json");
-  require(error_json["error"]["code"].get<int>() == -32602, "jsonrpc_error code mismatch");
-  require(error_json["error"]["data"].is_object(), "jsonrpc_error data should be object");
-}
-
-void test_control_ws_use_cases_v4_contract() {
+void test_control_ws_use_cases_v5_contract() {
   test_clock clock;
   clock.set(5000);
   in_memory_command_repository command_repo;
@@ -1020,13 +1033,51 @@ void test_control_ws_use_cases_v4_contract() {
       ws_out);
   require(ws_out.size() == 1, "register should produce one reply");
   require(
-      ws_out.front().type == owt::protocol::v4::agent::kTypeServerRegisterAck,
-      "reply should be server.register.ack");
+      ws_out.front().type == owt::protocol::v5::agent::kEventAgentRegistered,
+      "reply should be agent.registered");
 
   ctrl::domain::AgentState agent;
   require(
       registry.get_agent("AA:00:00:00:50:01", agent) && agent.online,
       "registered agent should be online");
+
+  ctrl::domain::CommandSnapshot seeded;
+  seeded.spec.command_id = "cmd-ws-usecase-result";
+  seeded.spec.trace_id = "trc-ws-usecase-result";
+  seeded.spec.kind = ctrl::domain::CommandKind::HostProbeGet;
+  seeded.agent = {"AA:00:00:00:50:01", "agent-50-01"};
+  seeded.state = ctrl::domain::CommandState::Dispatched;
+  seeded.created_at_ms = 5001;
+  seeded.updated_at_ms = 5001;
+  std::string repo_error;
+  require(command_repo.upsert(seeded, repo_error), "seed command should succeed");
+
+  ws_out.clear();
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-1",
+          ctrl::adapters::WsMessageKind::CommandResult,
+          "trc-result",
+          "AA:00:00:00:50:01",
+          "agent-50-01",
+          ctrl::domain::CommandState::Succeeded,
+          "cmd-ws-usecase-result",
+          0,
+          nlohmann::json{
+              {"command_id", "cmd-ws-usecase-result"},
+              {"final_status", "succeeded"},
+              {"exit_code", 0},
+              {"result", {{"ok", true}, {"source", "agent"}}},
+          }},
+      ws_out);
+  require(ws_out.empty(), "command.result should not produce direct reply");
+
+  ctrl::domain::CommandSnapshot loaded;
+  require(command_repo.get("cmd-ws-usecase-result", loaded, repo_error), "result command should exist");
+  require(loaded.state == ctrl::domain::CommandState::Succeeded, "command result should set terminal state");
+  require(
+      loaded.result == nlohmann::json{{"ok", true}, {"source", "agent"}},
+      "command result payload should use payload.result object");
 
   ws_out.clear();
   ws_use_cases.on_text(
@@ -1043,12 +1094,12 @@ void test_control_ws_use_cases_v4_contract() {
       ws_out);
   require(ws_out.size() == 1, "unknown kind should produce one reply");
   require(
-      ws_out.front().type == owt::protocol::v4::agent::kTypeServerError,
+      ws_out.front().type == owt::protocol::v5::agent::kErrorServerError,
       "unknown kind should return server.error");
   require(
       ws_out.front().payload.value("code", std::string{}) ==
-          owt::protocol::v4::error_code::kBadMessageType,
-      "unknown kind should return bad_message_type");
+          owt::protocol::v5::error_code::kMethodNotFound,
+      "unknown kind should return method_not_found");
 
   ws_use_cases.on_close("sess-1");
   require(
@@ -1234,20 +1285,133 @@ void test_sqlite_store_legacy_backup_and_rebuild() {
   }
 }
 
+void test_ws_event_scheduler_partition_fifo() {
+  app::ws::scheduler::EventScheduler scheduler;
+  app::ws::scheduler::EventSchedulerConfig config;
+  config.workers = 4;
+  config.queue_capacity = 1024;
+  config.low_priority_drop_threshold_pct = 80;
+  require(scheduler.start(config), "scheduler start should succeed");
+
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::vector<int> seq;
+  int completed = 0;
+  constexpr int kN = 200;
+
+  for (int i = 0; i < kN; ++i) {
+    const auto result = scheduler.post(
+        "agent-AA",
+        app::ws::scheduler::EventPriority::High,
+        [&mutex, &cv, &seq, &completed, i] {
+          std::lock_guard<std::mutex> lk(mutex);
+          seq.push_back(i);
+          ++completed;
+          cv.notify_all();
+        });
+    require(
+        result == app::ws::scheduler::PostResult::Accepted,
+        "fifo test post should be accepted");
+  }
+
+  {
+    std::unique_lock<std::mutex> lk(mutex);
+    require(
+        cv.wait_for(lk, std::chrono::seconds(5), [&completed] { return completed == kN; }),
+        "fifo test timed out");
+  }
+
+  require(static_cast<int>(seq.size()) == kN, "fifo size mismatch");
+  for (int i = 0; i < kN; ++i) {
+    require(seq[static_cast<std::size_t>(i)] == i, "fifo order mismatch");
+  }
+  scheduler.stop();
+}
+
+void test_ws_event_scheduler_backpressure_policy() {
+  app::ws::scheduler::EventScheduler scheduler;
+  app::ws::scheduler::EventSchedulerConfig config;
+  config.workers = 1;
+  config.queue_capacity = 8;
+  config.low_priority_drop_threshold_pct = 25;
+  require(scheduler.start(config), "scheduler start should succeed");
+
+  std::mutex gate_mutex;
+  std::condition_variable gate_cv;
+  bool started = false;
+  bool release = false;
+
+  const auto first = scheduler.post(
+      "agent-overflow",
+      app::ws::scheduler::EventPriority::High,
+      [&gate_mutex, &gate_cv, &started, &release] {
+        {
+          std::lock_guard<std::mutex> lk(gate_mutex);
+          started = true;
+          gate_cv.notify_all();
+        }
+        std::unique_lock<std::mutex> lk(gate_mutex);
+        gate_cv.wait(lk, [&release] { return release; });
+      });
+  require(first == app::ws::scheduler::PostResult::Accepted, "blocking task should be accepted");
+
+  {
+    std::unique_lock<std::mutex> lk(gate_mutex);
+    require(
+        gate_cv.wait_for(lk, std::chrono::seconds(3), [&started] { return started; }),
+        "blocking task should start");
+  }
+
+  int rejected_high = 0;
+  for (int i = 0; i < 256; ++i) {
+    const auto result = scheduler.post(
+        "agent-overflow",
+        app::ws::scheduler::EventPriority::High,
+        [] {});
+    if (result == app::ws::scheduler::PostResult::RejectedHighPriority) {
+      ++rejected_high;
+    }
+  }
+
+  int dropped_low = 0;
+  for (int i = 0; i < 256; ++i) {
+    const auto result = scheduler.post(
+        "agent-overflow",
+        app::ws::scheduler::EventPriority::Low,
+        [] {});
+    if (result == app::ws::scheduler::PostResult::DroppedLowPriority) {
+      ++dropped_low;
+    }
+  }
+  {
+    std::lock_guard<std::mutex> lk(gate_mutex);
+    release = true;
+  }
+  gate_cv.notify_all();
+  scheduler.stop();
+
+  require(rejected_high > 0, "high priority should be rejected when queue is full");
+  require(dropped_low > 0, "low priority should be dropped under backpressure");
+  require(scheduler.rejected_high_priority() > 0, "scheduler rejected counter should increase");
+  require(scheduler.dropped_low_priority() > 0, "scheduler dropped counter should increase");
+}
+
 } // namespace
 
 int main() {
   try {
     test_model_types_snake_case_mapping();
-    test_agent_envelope_v4_codec();
-    test_jsonrpc_request_validation();
+    test_command_bus_envelope_v5_codec();
     test_command_orchestrator_submit();
     test_agent_message_terminal_once();
     test_retry_service();
     test_params_rate_limiter_redaction();
-    test_control_ws_use_cases_v4_contract();
+    test_presenter_command_redaction();
+    test_control_ws_use_cases_v5_contract();
     test_sqlite_store_repository();
     test_sqlite_store_legacy_backup_and_rebuild();
+    test_ws_event_scheduler_partition_fifo();
+    test_ws_event_scheduler_backpressure_policy();
     std::cout << "owt-ctrl tests passed\n";
     return 0;
   } catch (const std::exception& ex) {

@@ -2,10 +2,10 @@
 
 #include "control/i_control_channel.h"
 
-#include <condition_variable>
 #include <deque>
+#include <memory>
 #include <mutex>
-#include <thread>
+#include <string>
 
 namespace control {
 
@@ -19,20 +19,24 @@ public:
   bool is_running() const noexcept override;
 
 private:
-  void worker_loop();
-  bool run_endpoint_session(const std::string& endpoint);
+  struct impl;
+
+  void start_connect_loop();
+  void schedule_reconnect();
+  void on_connection_established();
+  void on_connection_lost(const std::string& reason, bool emit_error);
+  void maybe_start_write();
   void invoke_connected();
   void invoke_disconnected();
   void invoke_error(const std::string& err);
 
   mutable std::mutex mutex_;
-  std::condition_variable cv_;
   bool running_ = false;
   bool connected_ = false;
   channel_start_options options_;
   channel_callbacks callbacks_;
   std::deque<std::string> outgoing_messages_;
-  std::thread worker_;
+  std::shared_ptr<impl> impl_;
 };
 
 } // namespace control

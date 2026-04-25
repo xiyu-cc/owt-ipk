@@ -1,5 +1,22 @@
 #include "service/ssh_executor.h"
 
+#if defined(OWT_AGENT_SSH_STUB)
+
+namespace service {
+
+ssh_result run_ssh_command(const ssh_request& req) {
+  (void)req;
+  ssh_result result;
+  result.error = "ssh executor unavailable: libssh2 headers/libraries not found at build time";
+  result.ok = false;
+  result.exit_status = -1;
+  return result;
+}
+
+} // namespace service
+
+#else
+
 #include <mutex>
 
 #include <libssh2.h>
@@ -170,3 +187,5 @@ ssh_result run_ssh_command(const ssh_request& req) {
 }
 
 } // namespace service
+
+#endif

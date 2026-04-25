@@ -2,47 +2,28 @@
 
 #include "control/control_json_codec.h"
 #include "log.h"
-#include "owt/protocol/v4/contract.h"
+#include "owt/protocol/v5/contract.h"
 
-#include <boost/asio/connect.hpp>
-#include <boost/asio/ip/tcp.hpp>
-#include <boost/asio/ssl.hpp>
-#include <boost/beast/core.hpp>
-#include <boost/beast/http.hpp>
-#include <boost/beast/ssl.hpp>
-#include <boost/beast/websocket.hpp>
+#include <drogon/WebSocketClient.h>
+#include <drogon/HttpRequest.h>
+#include <trantor/net/EventLoopThread.h>
 
-#include <boost/beast/websocket/ssl.hpp>
-#include <openssl/err.h>
-#include <openssl/ssl.h>
-
+#include <algorithm>
 #include <chrono>
 #include <exception>
+#include <memory>
 #include <string>
-#include <thread>
 #include <utility>
-#include <vector>
 
 namespace control {
 
 namespace {
 
-namespace asio = boost::asio;
-namespace beast = boost::beast;
-namespace http = beast::http;
-namespace websocket = beast::websocket;
-using tcp = asio::ip::tcp;
-
-namespace ssl = asio::ssl;
-
 constexpr std::size_t kMaxOutgoingQueue = 2048;
 constexpr auto kReconnectDelay = std::chrono::seconds(2);
-constexpr auto kPollInterval = std::chrono::milliseconds(250);
 
 struct endpoint_parts {
-  std::string scheme;
-  std::string host;
-  std::string port;
+  std::string host_string;
   std::string target;
 };
 
@@ -53,115 +34,66 @@ bool parse_endpoint(const std::string& endpoint, endpoint_parts& out, std::strin
     return false;
   }
 
-  out.scheme = endpoint.substr(0, scheme_pos);
-  if (out.scheme != "wss") {
-    err = "endpoint scheme must be wss";
+  const auto scheme = endpoint.substr(0, scheme_pos);
+  if (scheme != "wss" && scheme != "ws") {
+    err = "endpoint scheme must be ws or wss";
     return false;
   }
+
   auto rest = endpoint.substr(scheme_pos + 3);
   if (rest.empty()) {
     err = "endpoint missing host";
     return false;
   }
 
-  auto target_pos = rest.find('/');
-  auto authority = rest.substr(0, target_pos);
-  // If target path is omitted, use control-channel default path.
+  const auto target_pos = rest.find('/');
+  const auto authority = rest.substr(0, target_pos);
   out.target = (target_pos == std::string::npos)
-      ? std::string(owt::protocol::v4::kWsRouteAgent)
+      ? std::string(owt::protocol::v5::kWsRouteAgent)
       : rest.substr(target_pos);
 
-  if (authority.empty()) {
-    err = "endpoint missing authority";
+  if (authority.empty() || out.target.empty()) {
+    err = "endpoint authority/target invalid";
     return false;
   }
 
-  auto colon = authority.rfind(':');
-  if (colon != std::string::npos && colon + 1 < authority.size()) {
-    out.host = authority.substr(0, colon);
-    out.port = authority.substr(colon + 1);
-  } else {
-    out.host = authority;
-    out.port = "443";
-  }
-
-  if (out.host.empty() || out.port.empty() || out.target.empty()) {
-    err = "endpoint host/port/target invalid";
-    return false;
-  }
+  out.host_string = scheme + "://" + authority;
   return true;
 }
 
-bool is_timeout(const beast::error_code& ec) {
-  return ec == beast::error::timeout || ec == asio::error::timed_out;
-}
-
-template <typename WsStream>
-bool flush_outgoing(
-    WsStream& ws,
-    std::deque<std::string>& queue,
-    std::mutex& mutex,
-    std::size_t& sent_count) {
-  std::vector<std::string> batch;
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    if (queue.empty()) {
-      return true;
-    }
-    batch.assign(queue.begin(), queue.end());
-    queue.clear();
+std::string req_result_to_string(drogon::ReqResult r) {
+  switch (r) {
+    case drogon::ReqResult::Ok:
+      return "ok";
+    case drogon::ReqResult::BadResponse:
+      return "bad_response";
+    case drogon::ReqResult::NetworkFailure:
+      return "network_failure";
+    case drogon::ReqResult::BadServerAddress:
+      return "bad_server_address";
+    case drogon::ReqResult::Timeout:
+      return "timeout";
+    case drogon::ReqResult::HandshakeError:
+      return "handshake_error";
+    case drogon::ReqResult::InvalidCertificate:
+      return "invalid_certificate";
+    default:
+      return "unknown";
   }
-
-  for (std::size_t i = 0; i < batch.size(); ++i) {
-    const auto& payload = batch[i];
-    beast::error_code ec;
-    ws.text(true);
-    ws.write(asio::buffer(payload), ec);
-    if (ec) {
-      std::lock_guard<std::mutex> lock(mutex);
-      queue.insert(queue.begin(), batch.begin() + i, batch.end());
-      return false;
-    }
-    ++sent_count;
-  }
-  return true;
-}
-
-template <typename WsStream>
-bool poll_receive(WsStream& ws, channel_callbacks& callbacks) {
-  beast::flat_buffer buffer;
-  beast::error_code ec;
-  beast::get_lowest_layer(ws).expires_after(kPollInterval);
-  ws.read(buffer, ec);
-  if (!ec) {
-    const auto text = beast::buffers_to_string(buffer.data());
-    envelope message;
-    std::string err;
-    if (!decode_envelope_json(text, message, err)) {
-      if (callbacks.on_error) {
-        callbacks.on_error("decode message failed: " + err);
-      }
-      return true;
-    }
-    if (callbacks.on_message) {
-      callbacks.on_message(message);
-    }
-    return true;
-  }
-
-  if (is_timeout(ec)) {
-    return true;
-  }
-  if (ec == websocket::error::closed) {
-    return false;
-  }
-  if (callbacks.on_error) {
-    callbacks.on_error("websocket read failed: " + ec.message());
-  }
-  return false;
 }
 
 } // namespace
+
+struct wss_control_channel::impl {
+  explicit impl(wss_control_channel& owner_ref) : owner(owner_ref), loop_thread("owt-agent-ws") {}
+
+  wss_control_channel& owner;
+  trantor::EventLoopThread loop_thread;
+  trantor::EventLoop* loop = nullptr;
+  drogon::WebSocketClientPtr client;
+  endpoint_parts endpoint;
+  bool reconnect_pending = false;
+};
 
 wss_control_channel::~wss_control_channel() {
   stop();
@@ -186,33 +118,59 @@ bool wss_control_channel::start(const channel_start_options& options, channel_ca
     return false;
   }
 
-  worker_ = std::thread([this]() { worker_loop(); });
-  log::info("wss channel worker started, endpoint={}", options.endpoint);
+  auto state = std::make_shared<impl>(*this);
+  state->loop_thread.run();
+  state->loop = state->loop_thread.getLoop();
+  if (state->loop == nullptr) {
+    invoke_error("event loop unavailable");
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      running_ = false;
+    }
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    impl_ = state;
+  }
+
+  state->loop->queueInLoop([this]() { start_connect_loop(); });
+  log::info("wss channel started (drogon): endpoint={}", options.endpoint);
   return true;
 }
 
 void wss_control_channel::stop() {
-  std::thread worker_to_join;
+  std::shared_ptr<impl> state;
+  bool was_connected = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!running_) {
       return;
     }
     running_ = false;
-    cv_.notify_all();
-    worker_to_join = std::move(worker_);
-  }
-
-  if (worker_to_join.joinable()) {
-    worker_to_join.join();
-  }
-
-  const bool was_connected = [this]() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const bool value = connected_;
+    was_connected = connected_;
     connected_ = false;
-    return value;
-  }();
+    state = impl_;
+    impl_.reset();
+    outgoing_messages_.clear();
+  }
+
+  if (state) {
+    if (state->loop != nullptr) {
+      state->loop->queueInLoop([state]() {
+        if (state->client) {
+          state->client->stop();
+          state->client.reset();
+        }
+        if (state->loop != nullptr) {
+          state->loop->quit();
+        }
+      });
+    }
+    state->loop_thread.wait();
+  }
+
   if (was_connected) {
     invoke_disconnected();
   }
@@ -221,21 +179,19 @@ void wss_control_channel::stop() {
 
 bool wss_control_channel::send(const envelope& message) {
   const auto payload = encode_envelope_json(message);
+  std::shared_ptr<impl> state;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!running_) {
       log::warn("wss send dropped: channel is not running");
       return false;
     }
-    // Heartbeat is periodic telemetry and should not be buffered while offline.
-    // Otherwise reconnect will burst stale heartbeats and break expected cadence.
     if (message.type == message_type::agent_heartbeat && !connected_) {
       log::warn("heartbeat dropped: channel not connected");
       return false;
     }
 
     if (message.type == message_type::agent_register) {
-      // Ensure REGISTER is sent before any buffered payloads on a new connection.
       if (outgoing_messages_.size() >= kMaxOutgoingQueue) {
         outgoing_messages_.pop_back();
       }
@@ -247,8 +203,12 @@ bool wss_control_channel::send(const envelope& message) {
       }
       outgoing_messages_.push_back(payload);
     }
+    state = impl_;
   }
-  cv_.notify_all();
+
+  if (state && state->loop) {
+    state->loop->queueInLoop([this]() { maybe_start_write(); });
+  }
   return true;
 }
 
@@ -257,155 +217,205 @@ bool wss_control_channel::is_running() const noexcept {
   return running_;
 }
 
-void wss_control_channel::worker_loop() {
-  while (true) {
-    std::string endpoint;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (!running_) {
-        break;
-      }
-      endpoint = options_.endpoint;
+void wss_control_channel::start_connect_loop() {
+  std::shared_ptr<impl> state;
+  std::string endpoint;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_ || !impl_) {
+      return;
     }
+    endpoint = options_.endpoint;
+    state = impl_;
+  }
 
-    const auto ok = run_endpoint_session(endpoint);
-    if (!ok) {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (!running_) {
-        break;
-      }
-      cv_.wait_for(lock, kReconnectDelay, [this]() { return !running_; });
+  std::string parse_err;
+  if (!parse_endpoint(endpoint, state->endpoint, parse_err)) {
+    on_connection_lost("invalid endpoint: " + parse_err, true);
+    return;
+  }
+
+  const bool validate_cert = state->endpoint.host_string.rfind("wss://", 0) == 0;
+  state->client = drogon::WebSocketClient::newWebSocketClient(
+      state->endpoint.host_string,
+      state->loop,
+      false,
+      validate_cert);
+
+  state->client->setMessageHandler(
+      [this](std::string&& text,
+             const drogon::WebSocketClientPtr&,
+             const drogon::WebSocketMessageType& type) {
+        if (type != drogon::WebSocketMessageType::Text) {
+          return;
+        }
+
+        envelope message;
+        std::string error;
+        if (!decode_envelope_json(text, message, error)) {
+          invoke_error("decode message failed: " + error);
+          return;
+        }
+
+        channel_callbacks callbacks;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          callbacks = callbacks_;
+        }
+        if (callbacks.on_message) {
+          callbacks.on_message(message);
+        }
+      });
+
+  state->client->setConnectionClosedHandler([this](const drogon::WebSocketClientPtr&) {
+    on_connection_lost("connection closed", false);
+  });
+
+  auto req = drogon::HttpRequest::newHttpRequest();
+  req->setPath(state->endpoint.target);
+
+  state->client->connectToServer(
+      req,
+      [this](drogon::ReqResult r,
+             const drogon::HttpResponsePtr&,
+             const drogon::WebSocketClientPtr& ws_client) {
+        if (r != drogon::ReqResult::Ok || !ws_client || !ws_client->getConnection()) {
+          on_connection_lost("connect failed: " + req_result_to_string(r), true);
+          return;
+        }
+
+        on_connection_established();
+        maybe_start_write();
+      });
+}
+
+void wss_control_channel::schedule_reconnect() {
+  std::shared_ptr<impl> state;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_ || !impl_) {
+      return;
     }
+    state = impl_;
+    if (state->reconnect_pending || !state->loop) {
+      return;
+    }
+    state->reconnect_pending = true;
+  }
+
+  state->loop->runAfter(
+      std::chrono::duration<double>(kReconnectDelay),
+      [this, weak = std::weak_ptr<impl>(state)]() {
+        auto s = weak.lock();
+        if (!s) {
+          return;
+        }
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (!running_ || impl_ != s) {
+            return;
+          }
+          s->reconnect_pending = false;
+        }
+        start_connect_loop();
+      });
+}
+
+void wss_control_channel::on_connection_established() {
+  bool should_notify = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_ || connected_) {
+      return;
+    }
+    connected_ = true;
+    should_notify = true;
+  }
+
+  if (should_notify) {
+    invoke_connected();
   }
 }
 
-bool wss_control_channel::run_endpoint_session(const std::string& endpoint) {
-  endpoint_parts ep;
-  std::string parse_err;
-  if (!parse_endpoint(endpoint, ep, parse_err)) {
-    invoke_error("invalid endpoint: " + parse_err);
-    return false;
-  }
-
-  asio::io_context ioc;
-  tcp::resolver resolver(ioc);
-
-  std::size_t sent_count = 0;
-  ssl::context ssl_ctx(ssl::context::tls_client);
-  try {
-    ssl_ctx.set_default_verify_paths();
-  } catch (const std::exception& ex) {
-    invoke_error(std::string("load trust store failed: ") + ex.what());
-    return false;
-  }
-  ssl_ctx.set_verify_mode(ssl::verify_peer);
-  websocket::stream<beast::ssl_stream<beast::tcp_stream>> ws(ioc, ssl_ctx);
-
-  beast::error_code ec;
-  const auto results = resolver.resolve(ep.host, ep.port, ec);
-  if (ec) {
-    invoke_error("resolve failed: " + ec.message());
-    return false;
-  }
-  beast::get_lowest_layer(ws).connect(results, ec);
-  if (ec) {
-    invoke_error("connect failed: " + ec.message());
-    return false;
-  }
-  if (!SSL_set_tlsext_host_name(ws.next_layer().native_handle(), ep.host.c_str())) {
-    invoke_error("sni setup failed: " + std::to_string(static_cast<unsigned long>(ERR_get_error())));
-    return false;
-  }
-  ws.next_layer().set_verify_mode(ssl::verify_peer);
-  ws.next_layer().set_verify_callback(ssl::host_name_verification(ep.host));
-  ws.next_layer().handshake(ssl::stream_base::client, ec);
-  if (ec) {
-    invoke_error("tls handshake failed: " + ec.message());
-    return false;
-  }
-  ws.set_option(websocket::stream_base::timeout::suggested(beast::role_type::client));
-  ws.handshake(ep.host, ep.target, ec);
-  if (ec) {
-    invoke_error("websocket handshake failed: " + ec.message());
-    return false;
-  }
+void wss_control_channel::on_connection_lost(const std::string& reason, bool emit_error) {
+  bool notify_disconnected = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    connected_ = true;
-  }
-  invoke_connected();
-
-  while (true) {
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (!running_) {
-        break;
-      }
-      cv_.wait_for(
-          lock, kPollInterval, [this]() { return !running_ || !outgoing_messages_.empty(); });
-      if (!running_) {
-        break;
-      }
+    if (!running_) {
+      return;
     }
-
-    if (!flush_outgoing(ws, outgoing_messages_, mutex_, sent_count)) {
-      invoke_error("websocket write failed, reconnecting");
-      break;
-    }
-
-    channel_callbacks callbacks_copy;
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      callbacks_copy = callbacks_;
-    }
-    if (!poll_receive(ws, callbacks_copy)) {
-      break;
-    }
-  }
-
-  ws.close(websocket::close_code::normal, ec);
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
     if (connected_) {
       connected_ = false;
+      notify_disconnected = true;
     }
   }
-  invoke_disconnected();
-  log::info("wss session closed, sent_messages={}", sent_count);
-  return false;
+
+  if (emit_error) {
+    invoke_error(reason);
+  }
+  if (notify_disconnected) {
+    invoke_disconnected();
+  }
+
+  schedule_reconnect();
+}
+
+void wss_control_channel::maybe_start_write() {
+  std::deque<std::string> pending;
+  std::shared_ptr<impl> state;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_ || !connected_ || !impl_ || !impl_->client || !impl_->client->getConnection()) {
+      return;
+    }
+    if (outgoing_messages_.empty()) {
+      return;
+    }
+    pending.swap(outgoing_messages_);
+    state = impl_;
+  }
+
+  auto conn = state->client->getConnection();
+  if (!conn || !conn->connected()) {
+    on_connection_lost("connection unavailable while sending", false);
+    return;
+  }
+
+  for (auto& row : pending) {
+    conn->send(std::move(row), drogon::WebSocketMessageType::Text);
+  }
 }
 
 void wss_control_channel::invoke_connected() {
-  channel_callbacks callbacks_copy;
+  channel_callbacks callbacks;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    callbacks_copy = callbacks_;
+    callbacks = callbacks_;
   }
-  if (callbacks_copy.on_connected) {
-    callbacks_copy.on_connected();
+  if (callbacks.on_connected) {
+    callbacks.on_connected();
   }
 }
 
 void wss_control_channel::invoke_disconnected() {
-  channel_callbacks callbacks_copy;
+  channel_callbacks callbacks;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    callbacks_copy = callbacks_;
+    callbacks = callbacks_;
   }
-  if (callbacks_copy.on_disconnected) {
-    callbacks_copy.on_disconnected();
+  if (callbacks.on_disconnected) {
+    callbacks.on_disconnected();
   }
 }
 
 void wss_control_channel::invoke_error(const std::string& err) {
-  channel_callbacks callbacks_copy;
+  channel_callbacks callbacks;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    callbacks_copy = callbacks_;
+    callbacks = callbacks_;
   }
-  if (callbacks_copy.on_error) {
-    callbacks_copy.on_error(err);
+  if (callbacks.on_error) {
+    callbacks.on_error(err);
   }
 }
 

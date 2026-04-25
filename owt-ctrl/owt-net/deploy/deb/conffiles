@@ -1,4 +1,2 @@
 /etc/owt-net/config.ini
-/etc/owt-net/oauth2-proxy.cfg
-/etc/owt-net/google-allowed-emails.txt
 /etc/nginx/sites-available/owt-net.conf

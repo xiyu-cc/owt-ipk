@@ -1,5 +1,7 @@
 #include "control/control_json_codec.h"
 
+#include "owt/protocol/v5/contract.h"
+
 #include <nlohmann/json.hpp>
 
 #include <initializer_list>
@@ -31,6 +33,26 @@ bool reject_unknown_fields(
   }
   unknown_key.clear();
   return true;
+}
+
+bool is_valid_id(const json& id) {
+  return id.is_null() || id.is_string() || id.is_number_integer() || id.is_number_unsigned();
+}
+
+std::string kind_for_type(message_type type) {
+  switch (type) {
+    case message_type::agent_register:
+    case message_type::agent_heartbeat:
+    case message_type::agent_command_ack:
+    case message_type::agent_command_result:
+      return std::string(owt::protocol::v5::kind::kAction);
+    case message_type::server_register_ack:
+    case message_type::server_command_dispatch:
+      return std::string(owt::protocol::v5::kind::kEvent);
+    case message_type::server_error:
+      return std::string(owt::protocol::v5::kind::kError);
+  }
+  return std::string(owt::protocol::v5::kind::kError);
 }
 
 json command_to_json(const command& c) {
@@ -245,12 +267,12 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
     case message_type::server_command_dispatch: {
       if (!reject_unknown_fields(payload, {"command"}, unknown)) {
         ok = false;
-        error = "unknown field in server.command.dispatch data: " + unknown;
+        error = "unknown field in command.dispatch payload: " + unknown;
         return std::monostate{};
       }
       if (!payload.contains("command") || !payload["command"].is_object()) {
         ok = false;
-        error = "server.command.dispatch.command is required";
+        error = "command.dispatch.command is required";
         return std::monostate{};
       }
       command c;
@@ -328,14 +350,9 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
         error = "error.message must be string";
         return std::monostate{};
       }
-      if (payload.contains("detail") && !payload["detail"].is_string()) {
-        ok = false;
-        error = "error.detail must be string";
-        return std::monostate{};
-      }
       p.code = payload.value("code", std::string{});
       p.message = payload.value("message", std::string{});
-      p.detail = payload.value("detail", std::string{});
+      p.detail = payload.value("detail", json::object());
       return p;
     }
   }
@@ -349,16 +366,16 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
 
 std::string encode_envelope_json(const envelope& value) {
   json j = {
-      {"type", to_string(value.type)},
-      {"meta",
-       {
-           {"protocol", value.protocol},
-           {"ts_ms", value.sent_at_ms},
-           {"trace_id", value.trace_id},
-           {"agent_id", value.agent_id},
-       }},
-      {"data", payload_to_json(value.type, value.data)},
+      {"v", value.version},
+      {"kind", kind_for_type(value.type)},
+      {"name", to_string(value.type)},
+      {"id", value.id},
+      {"ts_ms", value.ts_ms},
+      {"payload", payload_to_json(value.type, value.payload)},
   };
+  if (!value.target.empty()) {
+    j["target"] = value.target;
+  }
   return j.dump();
 }
 
@@ -376,59 +393,65 @@ bool decode_envelope_json(const std::string& text, envelope& out, std::string& e
   }
 
   std::string unknown;
-  if (!reject_unknown_fields(j, {"type", "meta", "data"}, unknown)) {
+  if (!reject_unknown_fields(j, {"v", "kind", "name", "id", "ts_ms", "payload", "target"}, unknown)) {
     error = "unknown field in envelope: " + unknown;
     return false;
   }
+  if (!j.contains("v") || !j["v"].is_string() || j["v"].get<std::string>().empty()) {
+    error = "v is required";
+    return false;
+  }
+  if (!j.contains("kind") || !j["kind"].is_string() || j["kind"].get<std::string>().empty()) {
+    error = "kind is required";
+    return false;
+  }
+  if (!j.contains("name") || !j["name"].is_string() || j["name"].get<std::string>().empty()) {
+    error = "name is required";
+    return false;
+  }
+  if (!j.contains("ts_ms") || !j["ts_ms"].is_number_integer()) {
+    error = "ts_ms is required";
+    return false;
+  }
+  if (!j.contains("payload") || !j["payload"].is_object()) {
+    error = "payload is required";
+    return false;
+  }
+  if (j.contains("id") && !is_valid_id(j["id"])) {
+    error = "id must be string/integer/null";
+    return false;
+  }
+  if (j.contains("target") && !j["target"].is_string()) {
+    error = "target must be string";
+    return false;
+  }
 
-  if (!j.contains("type") || !j["type"].is_string()) {
-    error = "type is required";
+  message_type parsed_type = message_type::server_error;
+  if (!try_parse_message_type(j["name"].get<std::string>(), parsed_type)) {
+    error = "invalid name";
     return false;
   }
-  if (!j.contains("meta") || !j["meta"].is_object()) {
-    error = "meta is required";
-    return false;
-  }
-  if (!j.contains("data") || !j["data"].is_object()) {
-    error = "data is required";
+  const auto expected_kind = kind_for_type(parsed_type);
+  if (j["kind"].get<std::string>() != expected_kind) {
+    error = "kind does not match name";
     return false;
   }
 
-  const auto& meta = j["meta"];
-  if (!reject_unknown_fields(meta, {"protocol", "ts_ms", "trace_id", "agent_id"}, unknown)) {
-    error = "unknown field in meta: " + unknown;
-    return false;
-  }
-  if (!meta.contains("protocol") || !meta["protocol"].is_string()) {
-    error = "meta.protocol is required";
-    return false;
-  }
-  if (!meta.contains("ts_ms") || !meta["ts_ms"].is_number_integer()) {
-    error = "meta.ts_ms is required";
-    return false;
-  }
-  if (!meta.contains("trace_id") || !meta["trace_id"].is_string() ||
-      meta["trace_id"].get<std::string>().empty()) {
-    error = "meta.trace_id is required";
-    return false;
-  }
-  out.protocol = meta["protocol"].get<std::string>();
-  out.sent_at_ms = meta["ts_ms"].get<int64_t>();
-  out.trace_id = meta["trace_id"].get<std::string>();
-  out.agent_id = meta.value("agent_id", std::string{});
-
-  if (!try_parse_message_type(j["type"].get<std::string>(), out.type)) {
-    error = "invalid type";
-    return false;
-  }
+  out.type = parsed_type;
+  out.version = j["v"].get<std::string>();
+  out.id = j.value("id", json(nullptr));
+  out.ts_ms = j["ts_ms"].get<int64_t>();
+  out.target = j.value("target", std::string{});
 
   bool payload_ok = true;
   std::string payload_error;
-  out.data = payload_from_json(out.type, j["data"], payload_ok, payload_error);
+  out.payload = payload_from_json(out.type, j["payload"], payload_ok, payload_error);
   if (!payload_ok) {
     error = payload_error.empty() ? "invalid payload" : payload_error;
     return false;
   }
+
+  error.clear();
   return true;
 }
 

@@ -1,6 +1,6 @@
 #include "control/control_protocol.h"
 
-#include "owt/protocol/v4/contract.h"
+#include "owt/protocol/v5/contract.h"
 
 #include <atomic>
 #include <chrono>
@@ -10,56 +10,56 @@ namespace control {
 namespace {
 
 std::atomic<uint64_t> g_message_counter{0};
-constexpr const char* kCurrentProtocolVersion = "v4";
+constexpr auto kCurrentProtocolVersion = owt::protocol::v5::kProtocol;
 
 } // namespace
 
 std::string to_string(message_type value) {
   switch (value) {
     case message_type::agent_register:
-      return std::string(owt::protocol::v4::agent::kTypeAgentRegister);
+      return std::string(owt::protocol::v5::agent::kActionAgentRegister);
     case message_type::server_register_ack:
-      return std::string(owt::protocol::v4::agent::kTypeServerRegisterAck);
+      return std::string(owt::protocol::v5::agent::kEventAgentRegistered);
     case message_type::agent_heartbeat:
-      return std::string(owt::protocol::v4::agent::kTypeAgentHeartbeat);
+      return std::string(owt::protocol::v5::agent::kActionAgentHeartbeat);
     case message_type::server_command_dispatch:
-      return std::string(owt::protocol::v4::agent::kTypeServerCommandDispatch);
+      return std::string(owt::protocol::v5::agent::kEventCommandDispatch);
     case message_type::agent_command_ack:
-      return std::string(owt::protocol::v4::agent::kTypeAgentCommandAck);
+      return std::string(owt::protocol::v5::agent::kActionCommandAck);
     case message_type::agent_command_result:
-      return std::string(owt::protocol::v4::agent::kTypeAgentCommandResult);
+      return std::string(owt::protocol::v5::agent::kActionCommandResult);
     case message_type::server_error:
-      return std::string(owt::protocol::v4::agent::kTypeServerError);
+      return std::string(owt::protocol::v5::agent::kErrorServerError);
   }
   return "unknown";
 }
 
 bool try_parse_message_type(const std::string& text, message_type& out) {
-  if (text == owt::protocol::v4::agent::kTypeAgentRegister) {
+  if (text == owt::protocol::v5::agent::kActionAgentRegister) {
     out = message_type::agent_register;
     return true;
   }
-  if (text == owt::protocol::v4::agent::kTypeServerRegisterAck) {
+  if (text == owt::protocol::v5::agent::kEventAgentRegistered) {
     out = message_type::server_register_ack;
     return true;
   }
-  if (text == owt::protocol::v4::agent::kTypeAgentHeartbeat) {
+  if (text == owt::protocol::v5::agent::kActionAgentHeartbeat) {
     out = message_type::agent_heartbeat;
     return true;
   }
-  if (text == owt::protocol::v4::agent::kTypeServerCommandDispatch) {
+  if (text == owt::protocol::v5::agent::kEventCommandDispatch) {
     out = message_type::server_command_dispatch;
     return true;
   }
-  if (text == owt::protocol::v4::agent::kTypeAgentCommandAck) {
+  if (text == owt::protocol::v5::agent::kActionCommandAck) {
     out = message_type::agent_command_ack;
     return true;
   }
-  if (text == owt::protocol::v4::agent::kTypeAgentCommandResult) {
+  if (text == owt::protocol::v5::agent::kActionCommandResult) {
     out = message_type::agent_command_result;
     return true;
   }
-  if (text == owt::protocol::v4::agent::kTypeServerError) {
+  if (text == owt::protocol::v5::agent::kErrorServerError) {
     out = message_type::server_error;
     return true;
   }
@@ -183,7 +183,7 @@ bool try_parse_command_status(const std::string& text, command_status& out) {
 }
 
 const char* current_protocol_version() noexcept {
-  return kCurrentProtocolVersion;
+  return kCurrentProtocolVersion.data();
 }
 
 bool is_supported_protocol_version(const std::string& version) noexcept {

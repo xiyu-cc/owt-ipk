@@ -146,6 +146,22 @@ bool is_command_expired(const command& cmd, int64_t now_ms) {
   return cmd.expires_at_ms > 0 && now_ms >= cmd.expires_at_ms;
 }
 
+std::string request_id_to_text(const nlohmann::json& request_id) {
+  if (request_id.is_null()) {
+    return "";
+  }
+  if (request_id.is_string()) {
+    return request_id.get<std::string>();
+  }
+  if (request_id.is_number_integer()) {
+    return std::to_string(request_id.get<int64_t>());
+  }
+  if (request_id.is_number_unsigned()) {
+    return std::to_string(request_id.get<uint64_t>());
+  }
+  return request_id.dump();
+}
+
 } // namespace
 
 agent_runtime::agent_runtime() : wss_channel_(std::make_unique<wss_control_channel>()) {
@@ -163,7 +179,17 @@ bool agent_runtime::start(const agent_runtime_options& options) {
 
   options_ = options;
   running_.store(true, std::memory_order_relaxed);
+  runtime_event_dispatcher_options dispatcher_options;
+  dispatcher_options.workers = std::max(1, options_.ws_event_workers);
+  dispatcher_options.queue_capacity = static_cast<std::size_t>(std::max(64, options_.ws_event_queue_capacity));
+  dispatcher_options.low_priority_drop_threshold_pct = 80;
+  if (!event_dispatcher_.start(dispatcher_options)) {
+    running_.store(false, std::memory_order_relaxed);
+    log::error("agent runtime start failed: event dispatcher unavailable");
+    return false;
+  }
   if (!start_channel(*wss_channel_, options_.wss_endpoint)) {
+    event_dispatcher_.stop();
     running_.store(false, std::memory_order_relaxed);
     log::error("agent runtime start failed: wss channel unavailable");
     return false;
@@ -192,6 +218,7 @@ void agent_runtime::stop() {
   if (wss_channel_) {
     wss_channel_->stop();
   }
+  event_dispatcher_.stop();
   {
     std::lock_guard<std::mutex> lk(queue_mutex_);
     execution_stop_ = true;
@@ -385,7 +412,7 @@ void agent_runtime::install_command_executors() {
 
 bool agent_runtime::send_control_message(
     message_type type,
-    const std::string& trace_id,
+    const nlohmann::json& request_id,
     payload_variant data) {
   auto* ch = wss_channel_.get();
   if (ch == nullptr || !ch->is_running()) {
@@ -395,11 +422,11 @@ bool agent_runtime::send_control_message(
 
   envelope message;
   message.type = type;
-  message.protocol = options_.protocol_version;
-  message.sent_at_ms = unix_time_ms_now();
-  message.trace_id = trace_id.empty() ? make_message_id() : trace_id;
-  message.agent_id = options_.agent_id;
-  message.data = std::move(data);
+  message.version = options_.protocol_version;
+  message.id = request_id.is_null() ? nlohmann::json(make_message_id()) : request_id;
+  message.ts_ms = unix_time_ms_now();
+  message.target = options_.agent_mac;
+  message.payload = std::move(data);
   return ch->send(message);
 }
 
@@ -437,37 +464,84 @@ bool agent_runtime::send_heartbeat() {
 }
 
 bool agent_runtime::send_command_ack(
-    const std::string& trace_id,
+    const nlohmann::json& request_id,
     const std::string& command_id,
     command_status status,
     std::string_view message) {
   return send_control_message(
       message_type::agent_command_ack,
-      trace_id,
+      request_id,
       command_ack_payload{command_id, status, std::string(message)});
 }
 
 channel_callbacks agent_runtime::build_callbacks(const std::string& endpoint) {
   channel_callbacks callbacks;
   callbacks.on_connected = [this, endpoint]() {
-    log::info("control channel connected: endpoint={}", endpoint);
-    if (!send_register()) {
-      log::warn("send register on connected failed: endpoint={}", endpoint);
+    const auto result = event_dispatcher_.post(
+        "agent",
+        runtime_event_priority::high,
+        [this, endpoint]() {
+          log::info("control channel connected: endpoint={}", endpoint);
+          if (!send_register()) {
+            log::warn("send register on connected failed: endpoint={}", endpoint);
+          }
+        });
+    if (result != runtime_event_post_result::accepted) {
+      log::warn("drop on_connected callback: endpoint={}, reason={}", endpoint, static_cast<int>(result));
     }
   };
-  callbacks.on_disconnected = [endpoint]() {
-    log::warn("control channel disconnected: endpoint={}", endpoint);
+  callbacks.on_disconnected = [this, endpoint]() {
+    const auto result = event_dispatcher_.post(
+        "agent",
+        runtime_event_priority::high,
+        [endpoint]() {
+          log::warn("control channel disconnected: endpoint={}", endpoint);
+        });
+    if (result != runtime_event_post_result::accepted) {
+      log::warn("drop on_disconnected callback: endpoint={}, reason={}", endpoint, static_cast<int>(result));
+    }
   };
-  callbacks.on_error = [endpoint](const std::string& err) {
-    log::error("control channel error (endpoint={}): {}", endpoint, err);
+  callbacks.on_error = [this, endpoint](const std::string& err) {
+    const auto result = event_dispatcher_.post(
+        "agent",
+        runtime_event_priority::high,
+        [endpoint, err]() {
+          log::error("control channel error (endpoint={}): {}", endpoint, err);
+        });
+    if (result != runtime_event_post_result::accepted) {
+      log::warn("drop on_error callback: endpoint={}, reason={}", endpoint, static_cast<int>(result));
+    }
   };
   callbacks.on_message = [this, endpoint](const envelope& message) {
-    log::info(
-        "control channel message received (endpoint={}): trace_id={}, type={}",
-        endpoint,
-        message.trace_id,
-        to_string(message.type));
-    handle_channel_message(message);
+    std::string partition_key = "agent";
+    if (const auto* cmd = std::get_if<command>(&message.payload); cmd != nullptr && !cmd->command_id.empty()) {
+      partition_key = cmd->command_id;
+    } else {
+      const auto request_id = request_id_to_text(message.id);
+      if (!request_id.empty()) {
+        partition_key = request_id;
+      }
+    }
+    const auto result = event_dispatcher_.post(
+        partition_key,
+        runtime_event_priority::high,
+        [this, endpoint, message]() {
+          const auto request_id = request_id_to_text(message.id);
+          log::info(
+              "control channel message received (endpoint={}): id={}, name={}",
+              endpoint,
+              request_id,
+              to_string(message.type));
+          handle_channel_message(message);
+        });
+    if (result != runtime_event_post_result::accepted) {
+      const auto request_id = request_id_to_text(message.id);
+      log::warn(
+          "drop on_message callback: endpoint={}, id={}, reason={}",
+          endpoint,
+          request_id,
+          static_cast<int>(result));
+    }
   };
   return callbacks;
 }
@@ -499,22 +573,22 @@ bool agent_runtime::mark_command_seen(const std::string& command_id) {
 }
 
 void agent_runtime::handle_channel_message(const envelope& message) {
-  if (!is_supported_protocol_version(message.protocol)) {
+  if (!is_supported_protocol_version(message.version)) {
     log::error(
         "control channel message ignored: unsupported protocol={}, local_version={}",
-        message.protocol,
+        message.version,
         current_protocol_version());
     return;
   }
 
   if (message.type == message_type::server_error) {
-    const auto* payload = std::get_if<error_payload>(&message.data);
+    const auto* payload = std::get_if<error_payload>(&message.payload);
     if (payload != nullptr) {
       log::error(
           "control plane returned error: code={}, message={}, detail={}",
           payload->code,
           payload->message,
-          payload->detail);
+          payload->detail.dump());
     } else {
       log::error("control plane returned malformed error payload");
     }
@@ -525,13 +599,13 @@ void agent_runtime::handle_channel_message(const envelope& message) {
     return;
   }
 
-  const auto* cmd = std::get_if<command>(&message.data);
+  const auto* cmd = std::get_if<command>(&message.payload);
   if (cmd == nullptr) {
     log::warn("server.command.dispatch payload missing command body");
     return;
   }
 
-  if (!send_command_ack(message.trace_id, cmd->command_id, command_status::acked, "accepted")) {
+  if (!send_command_ack(message.id, cmd->command_id, command_status::acked, "accepted")) {
     log::warn("command ack send failed: command_id={}", cmd->command_id);
     return;
   }
@@ -552,7 +626,7 @@ void agent_runtime::handle_channel_message(const envelope& message) {
         {"checked_at_ms", checked_at_ms},
     };
     if (!send_command_result(
-            message.trace_id,
+            message.id,
             cmd->command_id,
             command_status::timed_out,
             -1,
@@ -567,10 +641,10 @@ void agent_runtime::handle_channel_message(const envelope& message) {
     return;
   }
 
-  enqueue_command(message.trace_id, *cmd);
+  enqueue_command(message.id, *cmd);
 }
 
-void agent_runtime::execute_command(const std::string& trace_id, const command& cmd) {
+void agent_runtime::execute_command(const nlohmann::json& request_id, const command& cmd) {
   nlohmann::json payload = cmd.payload;
   if (!payload.is_object()) {
     payload = nlohmann::json::object();
@@ -579,7 +653,7 @@ void agent_runtime::execute_command(const std::string& trace_id, const command& 
   const auto it = command_executors_.find(cmd.type);
   if (it == command_executors_.end()) {
     (void)send_command_result(
-        trace_id,
+        request_id,
         cmd.command_id,
         command_status::failed,
         -1,
@@ -589,7 +663,7 @@ void agent_runtime::execute_command(const std::string& trace_id, const command& 
 
   const auto execution = it->second(cmd, payload);
   (void)send_command_result(
-      trace_id,
+      request_id,
       cmd.command_id,
       execution.status,
       execution.exit_code,
@@ -597,21 +671,21 @@ void agent_runtime::execute_command(const std::string& trace_id, const command& 
 }
 
 bool agent_runtime::send_command_result(
-    const std::string& trace_id,
+    const nlohmann::json& request_id,
     const std::string& command_id,
     command_status final_status,
     int exit_code,
     const nlohmann::json& result) {
   return send_control_message(
       message_type::agent_command_result,
-      trace_id,
+      request_id,
       command_result_payload{command_id, final_status, exit_code, result});
 }
 
-void agent_runtime::enqueue_command(const std::string& trace_id, const command& cmd) {
+void agent_runtime::enqueue_command(const nlohmann::json& request_id, const command& cmd) {
   {
     std::lock_guard<std::mutex> lk(queue_mutex_);
-    queue_.push_back(queued_command{trace_id, cmd});
+    queue_.push_back(queued_command{request_id, cmd});
   }
   queue_cv_.notify_one();
 }
@@ -629,7 +703,7 @@ void agent_runtime::execution_loop() {
       queue_.pop_front();
     }
     try {
-      execute_command(item.trace_id, item.cmd);
+      execute_command(item.request_id, item.cmd);
     } catch (const std::exception& ex) {
       log::error("execute command failed with exception: command_id={}, err={}", item.cmd.command_id, ex.what());
       nlohmann::json result = {
@@ -638,7 +712,7 @@ void agent_runtime::execution_loop() {
           {"message", "command execution exception"},
       };
       result["detail"] = ex.what();
-      if (!send_command_result(item.trace_id, item.cmd.command_id, command_status::failed, -1, result)) {
+      if (!send_command_result(item.request_id, item.cmd.command_id, command_status::failed, -1, result)) {
         log::warn(
             "send command result after exception failed: command_id={}", item.cmd.command_id);
       }
@@ -650,7 +724,7 @@ void agent_runtime::execution_loop() {
           {"message", "command execution exception"},
           {"detail", "unknown exception"},
       };
-      if (!send_command_result(item.trace_id, item.cmd.command_id, command_status::failed, -1, result)) {
+      if (!send_command_result(item.request_id, item.cmd.command_id, command_status::failed, -1, result)) {
         log::warn(
             "send command result after unknown exception failed: command_id={}", item.cmd.command_id);
       }

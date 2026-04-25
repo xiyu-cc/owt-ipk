@@ -99,7 +99,7 @@ struct command_result_payload {
 struct error_payload {
   std::string code;
   std::string message;
-  std::string detail;
+  nlohmann::json detail = nlohmann::json::object();
 };
 
 using payload_variant = std::variant<
@@ -114,11 +114,11 @@ using payload_variant = std::variant<
 
 struct envelope {
   message_type type = message_type::agent_heartbeat;
-  std::string protocol = "v4";
-  int64_t sent_at_ms = 0;
-  std::string trace_id;
-  std::string agent_id;
-  payload_variant data;
+  std::string version = "v5";
+  nlohmann::json id = nullptr;
+  int64_t ts_ms = 0;
+  std::string target;
+  payload_variant payload;
 };
 
 } // namespace control

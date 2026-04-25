@@ -167,6 +167,8 @@ int main(int argc, char* argv[]) {
   options.agent_mac = resolve_agent_mac(cfg.agent.agent_mac);
   options.protocol_version = cfg.agent.protocol_version;
   options.wss_endpoint = cfg.agent.wss_endpoint;
+  options.ws_event_workers = cfg.agent.ws_event_workers;
+  options.ws_event_queue_capacity = cfg.agent.ws_event_queue_capacity;
   if (options.agent_mac.empty()) {
     log::error("agent runtime start failed: cannot resolve agent_mac");
     log::shutdown();
@@ -178,9 +180,11 @@ int main(int argc, char* argv[]) {
   const int status_collect_interval_ms =
       std::clamp(cfg.agent.status_collect_interval_ms, 200, 60000);
   log::info(
-      "runtime intervals: heartbeat_interval_ms={}, status_collect_interval_ms={}",
+      "runtime intervals: heartbeat_interval_ms={}, status_collect_interval_ms={}, ws_event_workers={}, ws_event_queue_capacity={}",
       heartbeat_interval_ms,
-      status_collect_interval_ms);
+      status_collect_interval_ms,
+      options.ws_event_workers,
+      options.ws_event_queue_capacity);
 
   service::start_host_probe_agent(status_collect_interval_ms);
   if (!runtime.start(options)) {

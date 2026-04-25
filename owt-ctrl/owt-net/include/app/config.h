@@ -13,6 +13,11 @@ struct ServerConfig {
   int rate_limit_burst = 40;
   int retry_tick_ms = 250;
   int retry_batch = 100;
+  int ws_event_workers = 0;
+  int ws_event_queue_capacity = 4096;
+  int ws_event_low_priority_drop_threshold_pct = 80;
+  int ui_event_send_timeout_ms = 2000;
+  int ui_session_queue_limit = 1024;
 };
 
 struct StorageConfig {

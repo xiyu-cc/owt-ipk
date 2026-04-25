@@ -4,10 +4,10 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AgentPanel from './components/AgentPanel.vue'
 import CommandPanel from './components/CommandPanel.vue'
 import ParamsPanel from './components/ParamsPanel.vue'
-import { useRpcSocket } from './composables/useRpcSocket'
-import { RPC_EVENTS, RPC_METHODS, WS_UI_PATH } from './protocol/v4'
+import { useCommandBusSocket } from './composables/useCommandBusSocket'
+import { COMMAND_BUS_EVENTS, COMMAND_BUS_ACTIONS, WS_UI_PATH } from './protocol/v5'
 
-const rpc = useRpcSocket(WS_UI_PATH)
+const bus = useCommandBusSocket(WS_UI_PATH)
 
 const agents = ref([])
 const selectedAgentMac = ref('')
@@ -49,11 +49,56 @@ function appendCommandEvent(resource) {
   }
 }
 
+function commandTypeLabel(type) {
+  const map = {
+    wol_wake: '开机',
+    host_reboot: '重启',
+    host_poweroff: '关机',
+    host_probe_get: '状态探测',
+    monitoring_set: '采集开关',
+    params_get: '参数读取',
+    params_set: '参数下发'
+  }
+  return map[type] || type || '-'
+}
+
+function summarizeEvent(item) {
+  const command = item?.command || {}
+  const event = item?.event || {}
+  const detail = event?.detail || {}
+  const status = event?.status || '-'
+  const commandType = commandTypeLabel(command?.command_type)
+
+  if (status === 'succeeded') {
+    return `${commandType}执行成功`
+  }
+  if (status === 'timed_out') {
+    return `${commandType}执行超时`
+  }
+  if (status === 'failed') {
+    const reason =
+      detail?.result?.error ||
+      detail?.error ||
+      command?.result?.message ||
+      command?.result?.error ||
+      command?.result?.error_code ||
+      '执行失败'
+    return `${commandType}${reason}`
+  }
+  if (status === 'running') {
+    return `${commandType}执行中`
+  }
+  if (status === 'acked' || status === 'dispatched') {
+    return `${commandType}已受理`
+  }
+  return `${commandType}${status}`
+}
+
 async function refreshAgents() {
   loadingAgents.value = true
   try {
-    const res = await rpc.call(RPC_METHODS.AGENT_LIST, { include_offline: true })
-    normalizeSnapshot(res?.resource || {})
+    const res = await bus.call(COMMAND_BUS_ACTIONS.AGENT_LIST, { include_offline: true })
+    normalizeSnapshot(res || {})
     lastError.value = ''
   } catch (err) {
     lastError.value = err instanceof Error ? err.message : String(err)
@@ -66,8 +111,8 @@ async function loadParams() {
   if (!selectedAgentMac.value) return
   busy.value = true
   try {
-    const res = await rpc.call(RPC_METHODS.PARAMS_GET, { agent_mac: selectedAgentMac.value })
-    paramsText.value = JSON.stringify(res?.resource?.params || {}, null, 2)
+    const res = await bus.call(COMMAND_BUS_ACTIONS.PARAMS_GET, { agent_mac: selectedAgentMac.value })
+    paramsText.value = JSON.stringify(res?.params || {}, null, 2)
     lastAction.value = 'params.get completed'
     lastError.value = ''
   } catch (err) {
@@ -89,12 +134,12 @@ async function saveParams() {
 
   busy.value = true
   try {
-    const res = await rpc.call(RPC_METHODS.PARAMS_UPDATE, {
+    const res = await bus.call(COMMAND_BUS_ACTIONS.PARAMS_UPDATE, {
       agent_mac: selectedAgentMac.value,
       params: parsed
     })
-    paramsText.value = JSON.stringify(res?.resource?.params || parsed, null, 2)
-    const commandId = res?.resource?.command?.command_id || '-'
+    paramsText.value = JSON.stringify(res?.params || parsed, null, 2)
+    const commandId = res?.command?.command_id || '-'
     lastAction.value = `params.update accepted: ${commandId}`
     lastError.value = ''
   } catch (err) {
@@ -111,7 +156,7 @@ async function runCommand({ commandType, payload, title }) {
   }
   busy.value = true
   try {
-    const res = await rpc.call(RPC_METHODS.COMMAND_SUBMIT, {
+    const res = await bus.call(COMMAND_BUS_ACTIONS.COMMAND_SUBMIT, {
       agent_mac: selectedAgentMac.value,
       agent_id: selectedAgent.value?.agent_id || selectedAgentMac.value,
       command_type: commandType,
@@ -119,7 +164,7 @@ async function runCommand({ commandType, payload, title }) {
       timeout_ms: 5000,
       max_retry: 1
     })
-    const commandId = res?.resource?.command_id || '-'
+    const commandId = res?.command_id || '-'
     lastAction.value = `${title} accepted: ${commandId}`
     lastError.value = ''
   } catch (err) {
@@ -131,35 +176,41 @@ async function runCommand({ commandType, payload, title }) {
 
 async function bootstrap() {
   try {
-    await rpc.call(RPC_METHODS.SESSION_SUBSCRIBE, { scope: 'all' })
+    await bus.call(COMMAND_BUS_ACTIONS.SESSION_SUBSCRIBE, { scope: 'all' })
   } catch (_) {
     // ignore
   }
   await refreshAgents()
 }
 
-const offOpen = rpc.on('__open__', () => {
+const offOpen = bus.on('__open__', () => {
   void bootstrap()
 })
 
-const offSnapshot = rpc.on(RPC_EVENTS.AGENT_SNAPSHOT, (params) => {
+const offSnapshot = bus.on(COMMAND_BUS_EVENTS.AGENT_SNAPSHOT, (params) => {
   normalizeSnapshot(params?.resource || {})
 })
 
-const offAgent = rpc.on(RPC_EVENTS.AGENT_UPDATE, (params) => {
+const offAgent = bus.on(COMMAND_BUS_EVENTS.AGENT_UPDATE, (params) => {
   upsertAgent(params?.resource)
 })
 
-const offCommand = rpc.on(RPC_EVENTS.COMMAND_EVENT, (params) => {
-  appendCommandEvent(params?.resource)
+const offCommand = bus.on(COMMAND_BUS_EVENTS.COMMAND_EVENT, (params) => {
+  const resource = params?.resource
+  const agentMac = resource?.command?.agent_mac
+  if (selectedAgentMac.value && agentMac && selectedAgentMac.value !== agentMac) {
+    return
+  }
+  appendCommandEvent(resource)
 })
 
 watch(
   () => selectedAgentMac.value,
   async (next) => {
-    if (!next || !rpc.connected.value) return
+    if (!next || !bus.connected.value) return
+    commandEvents.value = []
     try {
-      await rpc.call(RPC_METHODS.SESSION_SUBSCRIBE, { scope: 'agent', agent_mac: next })
+      await bus.call(COMMAND_BUS_ACTIONS.SESSION_SUBSCRIBE, { scope: 'agent', agent_mac: next })
     } catch (_) {
       // ignore
     }
@@ -168,7 +219,7 @@ watch(
 )
 
 onMounted(() => {
-  rpc.connect()
+  bus.connect()
 })
 
 onUnmounted(() => {
@@ -176,15 +227,15 @@ onUnmounted(() => {
   offSnapshot()
   offAgent()
   offCommand()
-  rpc.close()
+  bus.close()
 })
 </script>
 
 <template>
   <main class="page">
     <header class="card">
-      <h1>OWT Control v4</h1>
-      <p class="hint">WS-only / JSON-RPC 2.0 / agent+ui channels</p>
+      <h1>OWT Control v5</h1>
+      <p class="hint">WS-only / Drogon command bus v5 / agent+ui channels</p>
       <p v-if="lastError" class="error">{{ lastError }}</p>
       <p v-if="lastAction" class="hint">{{ lastAction }}</p>
     </header>
@@ -192,7 +243,7 @@ onUnmounted(() => {
     <AgentPanel
       v-model:selectedAgentMac="selectedAgentMac"
       :agents="agents"
-      :connected="rpc.connected"
+      :connected="bus.connected"
       :loading="loadingAgents || busy"
       @refresh="refreshAgents"
     />
@@ -207,11 +258,15 @@ onUnmounted(() => {
       <div v-else class="events">
         <article v-for="(item, idx) in commandEvents" :key="idx" class="event-item">
           <div class="event-head">
-            <strong>{{ item?.command?.command_type || '-' }}</strong>
+            <strong>{{ commandTypeLabel(item?.command?.command_type) }}</strong>
             <span>{{ item?.event?.event_type || '-' }}</span>
             <span>{{ item?.event?.status || '-' }}</span>
           </div>
-          <pre class="mono">{{ JSON.stringify(item, null, 2) }}</pre>
+          <p class="hint">{{ summarizeEvent(item) }}</p>
+          <details>
+            <summary class="hint">查看原始详情</summary>
+            <pre class="mono">{{ JSON.stringify(item, null, 2) }}</pre>
+          </details>
         </article>
       </div>
     </section>

@@ -1,6 +1,63 @@
 #include "app/presenter/serializers.h"
 
+#include <algorithm>
+#include <cctype>
+#include <string>
+#include <vector>
+
 namespace app::presenter {
+
+namespace {
+
+std::string to_lower(std::string text) {
+  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return text;
+}
+
+bool is_sensitive_key(std::string_view key) {
+  static const std::vector<std::string> tokens = {
+      "password",
+      "passwd",
+      "pwd",
+      "token",
+      "secret",
+      "private_key",
+      "private-key",
+  };
+  const auto lowered = to_lower(std::string(key));
+  for (const auto& token : tokens) {
+    if (lowered.find(token) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+nlohmann::json redact_sensitive(const nlohmann::json& value) {
+  if (value.is_object()) {
+    nlohmann::json out = nlohmann::json::object();
+    for (auto it = value.begin(); it != value.end(); ++it) {
+      if (is_sensitive_key(it.key())) {
+        out[it.key()] = "***";
+      } else {
+        out[it.key()] = redact_sensitive(it.value());
+      }
+    }
+    return out;
+  }
+  if (value.is_array()) {
+    nlohmann::json out = nlohmann::json::array();
+    for (const auto& item : value) {
+      out.push_back(redact_sensitive(item));
+    }
+    return out;
+  }
+  return value;
+}
+
+} // namespace
 
 nlohmann::json to_agent_json(const ctrl::domain::AgentState& state) {
   return {
@@ -25,8 +82,8 @@ nlohmann::json to_command_json(const ctrl::domain::CommandSnapshot& row) {
       {"agent_id", row.agent.display_id},
       {"command_type", ctrl::domain::to_string(row.spec.kind)},
       {"status", ctrl::domain::to_string(row.state)},
-      {"payload", row.spec.payload},
-      {"result", row.result},
+      {"payload", redact_sensitive(row.spec.payload)},
+      {"result", redact_sensitive(row.result)},
       {"timeout_ms", row.spec.timeout_ms},
       {"max_retry", row.spec.max_retry},
       {"expires_at_ms", row.spec.expires_at_ms},
@@ -43,7 +100,7 @@ nlohmann::json to_command_event_json(const ctrl::domain::CommandEvent& event) {
       {"command_id", event.command_id},
       {"event_type", event.type},
       {"status", ctrl::domain::to_string(event.state)},
-      {"detail", event.detail},
+      {"detail", redact_sensitive(event.detail)},
       {"created_at_ms", event.created_at_ms},
   };
 }

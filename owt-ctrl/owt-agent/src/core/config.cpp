@@ -77,6 +77,20 @@ Config loadConfig(const std::string& path) {
         } catch (const std::exception&) {
           // keep default
         }
+      } else if (key == "ws_event_workers") {
+        try {
+          const int parsed = std::stoi(value);
+          cfg.agent.ws_event_workers = std::clamp(parsed, 1, 256);
+        } catch (const std::exception&) {
+          // keep default
+        }
+      } else if (key == "ws_event_queue_capacity") {
+        try {
+          const int parsed = std::stoi(value);
+          cfg.agent.ws_event_queue_capacity = std::clamp(parsed, 64, 1'000'000);
+        } catch (const std::exception&) {
+          // keep default
+        }
       }
       continue;
     }

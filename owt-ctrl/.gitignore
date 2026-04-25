@@ -1,0 +1,27 @@
+# Build outputs
+build/
+build-*/
+**/build/
+**/build-*/
+owt-out/
+
+# Runtime logs
+logs/
+**/logs/
+
+# Package artifacts
+*.deb
+*.ipk
+
+# Frontend artifacts
+owt-net/frontend/node_modules/
+owt-net/frontend/dist/
+
+# CMake/Ninja local files
+compile_commands.json
+CMakeUserPresets.json
+.ninja_log
+.ninja_deps
+
+# OS noise
+.DS_Store

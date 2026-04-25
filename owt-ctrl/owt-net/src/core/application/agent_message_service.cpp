@@ -60,6 +60,17 @@ void AgentMessageService::on_agent_registered(
   publisher_.publish_snapshot("agent_register", agent_mac);
 }
 
+void AgentMessageService::on_agent_heartbeat(
+    std::string_view agent_mac,
+    const nlohmann::json& heartbeat_stats,
+    int64_t heartbeat_at_ms) {
+  if (agent_mac.empty()) {
+    throw std::invalid_argument("agent_mac is required");
+  }
+  registry_.on_heartbeat(agent_mac, heartbeat_stats, heartbeat_at_ms);
+  publisher_.publish_agent("agent_heartbeat", agent_mac);
+}
+
 void AgentMessageService::on_command_ack(
     std::string_view agent_mac,
     std::string_view command_id,
