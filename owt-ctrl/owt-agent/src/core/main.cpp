@@ -1,4 +1,5 @@
 #include "config.h"
+#include "common/string_utils.h"
 #include "control/agent_runtime.h"
 #include "log.h"
 #include "service/host_probe_agent.h"
@@ -11,7 +12,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cctype>
 #include <csignal>
 #include <cstdlib>
 #include <iomanip>
@@ -25,24 +25,6 @@ std::atomic<bool> g_stop_requested{false};
 
 void on_signal(int) {
   g_stop_requested.store(true, std::memory_order_relaxed);
-}
-
-std::string trim(std::string value) {
-  const auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.front()))) {
-    value.erase(value.begin());
-  }
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.back()))) {
-    value.pop_back();
-  }
-  return value;
-}
-
-std::string to_lower(std::string value) {
-  for (char& c : value) {
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  }
-  return value;
 }
 
 bool parse_mac(const std::string& text, std::array<uint8_t, 6>& out) {
@@ -81,7 +63,7 @@ std::string format_mac(const uint8_t* bytes) {
 }
 
 std::string normalize_mac(std::string value) {
-  value = trim(std::move(value));
+  value = owt_agent::common::trim(std::move(value));
   if (value.empty()) {
     return "";
   }
@@ -134,8 +116,8 @@ std::string detect_agent_mac() {
 }
 
 std::string resolve_agent_mac(const std::string& configured) {
-  const auto trimmed = trim(configured);
-  if (!trimmed.empty() && to_lower(trimmed) != "auto") {
+  const auto trimmed = owt_agent::common::trim(configured);
+  if (!trimmed.empty() && owt_agent::common::to_lower(trimmed) != "auto") {
     const auto normalized = normalize_mac(trimmed);
     if (!normalized.empty()) {
       return normalized;
@@ -156,7 +138,7 @@ int main(int argc, char* argv[]) {
   }
   log::info("config path: {}", configPath);
 
-  const auto cfg = owt_agent::loadConfig(configPath);
+  const auto cfg = owt_agent::load_config(configPath);
 
   std::signal(SIGINT, on_signal);
   std::signal(SIGTERM, on_signal);

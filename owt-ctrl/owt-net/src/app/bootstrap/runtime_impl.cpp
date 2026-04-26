@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
+#include <memory>
 #include <string>
 
 namespace app::bootstrap {
@@ -20,20 +21,19 @@ struct RuntimeImpl::State {
   runtime::RuntimeComposition runtime;
 };
 
-RuntimeImpl::RuntimeImpl(const Config& config) : state_(new State(config)) {}
+RuntimeImpl::RuntimeImpl(const Config& config)
+    : state_(std::make_unique<State>(config)) {}
 
 RuntimeImpl::~RuntimeImpl() {
-  if (state_ != nullptr) {
+  if (state_) {
     state_->runtime.lifecycle.stop();
     state_->runtime.event_scheduler.stop();
     state_->runtime.ui_sessions.close_all();
-    delete state_;
-    state_ = nullptr;
   }
 }
 
 int RuntimeImpl::run() {
-  if (state_ == nullptr) {
+  if (!state_) {
     return EXIT_FAILURE;
   }
 

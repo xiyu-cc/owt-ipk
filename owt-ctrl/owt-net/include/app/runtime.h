@@ -2,7 +2,13 @@
 
 #include "app/config.h"
 
+#include <memory>
+
 namespace app {
+
+namespace bootstrap {
+class RuntimeImpl;
+}
 
 class Runtime {
 public:
@@ -14,7 +20,7 @@ public:
   int run();
 
 private:
-  void* impl_ = nullptr;
+  std::unique_ptr<bootstrap::RuntimeImpl> impl_;
 };
 
 } // namespace app

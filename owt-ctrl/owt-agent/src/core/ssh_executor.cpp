@@ -1,4 +1,5 @@
 #include "service/ssh_executor.h"
+#include "service/ssh_stream_reader.h"
 
 #if defined(OWT_AGENT_SSH_STUB)
 
@@ -149,30 +150,16 @@ ssh_result run_ssh_command(const ssh_request& req) {
     return result;
   }
 
-  char buffer[4096];
-  while (true) {
-    const ssize_t n = libssh2_channel_read(channel, buffer, sizeof(buffer));
-    if (n > 0) {
-      result.output.append(buffer, static_cast<size_t>(n));
-      continue;
-    }
-    if (n == LIBSSH2_ERROR_EAGAIN) {
-      continue;
-    }
-    break;
-  }
-
-  while (true) {
-    const ssize_t n = libssh2_channel_read_stderr(channel, buffer, sizeof(buffer));
-    if (n > 0) {
-      result.output.append(buffer, static_cast<size_t>(n));
-      continue;
-    }
-    if (n == LIBSSH2_ERROR_EAGAIN) {
-      continue;
-    }
-    break;
-  }
+  ssh_stream_reader::collect_streams(
+      [channel](char* buffer, std::size_t buffer_size) {
+        return static_cast<long long>(libssh2_channel_read(channel, buffer, buffer_size));
+      },
+      [channel](char* buffer, std::size_t buffer_size) {
+        return static_cast<long long>(libssh2_channel_read_stderr(channel, buffer, buffer_size));
+      },
+      static_cast<long long>(LIBSSH2_ERROR_EAGAIN),
+      result.output,
+      result.error);
 
   result.exit_status = libssh2_channel_get_exit_status(channel);
   result.ok = (result.exit_status == 0);

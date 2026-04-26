@@ -1,12 +1,12 @@
 #include "service/host_probe_agent.h"
 
+#include "common/string_utils.h"
 #include "service/params_store.h"
 #include "service/ssh_executor.h"
 
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
-#include <cctype>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -45,13 +45,6 @@ struct probe_counters {
   std::chrono::steady_clock::time_point sampled_at{};
 };
 
-std::string trim(std::string s) {
-  const auto not_space = [](unsigned char c) { return !std::isspace(c); };
-  s.erase(s.begin(), std::find_if(s.begin(), s.end(), not_space));
-  s.erase(std::find_if(s.rbegin(), s.rend(), not_space).base(), s.end());
-  return s;
-}
-
 int64_t now_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -64,7 +57,7 @@ std::string sanitize_reason(std::string s) {
       c = ' ';
     }
   }
-  s = trim(std::move(s));
+  s = owt_agent::common::trim(std::move(s));
   if (s.size() > 180) {
     s.resize(180);
     s += "...";
@@ -121,7 +114,7 @@ bool parse_prefixed_u64(const std::string& line, const char* prefix, uint64_t& v
   if (line.rfind(p, 0) != 0) {
     return false;
   }
-  return parse_u64(trim(line.substr(p.size())), value);
+  return parse_u64(owt_agent::common::trim(line.substr(p.size())), value);
 }
 
 bool parse_net_dev_line(const std::string& line, uint64_t& rx, uint64_t& tx) {
@@ -129,7 +122,7 @@ bool parse_net_dev_line(const std::string& line, uint64_t& rx, uint64_t& tx) {
   if (colon == std::string::npos) {
     return false;
   }
-  const std::string iface = trim(line.substr(0, colon));
+  const std::string iface = owt_agent::common::trim(line.substr(0, colon));
   if (iface.empty() || iface == "lo") {
     return false;
   }
@@ -197,7 +190,7 @@ host_probe_snapshot parse_probe_output(
   std::istringstream in(output);
   std::string line;
   while (std::getline(in, line)) {
-    line = trim(std::move(line));
+    line = owt_agent::common::trim(std::move(line));
     if (line.empty()) {
       continue;
     }

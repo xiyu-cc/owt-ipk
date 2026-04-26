@@ -199,3 +199,19 @@ owt-agent/application/owt-agent/files/config.ini
 ```
 
 关键配置项包括 `agent_id`、`agent_mac`、`wss_endpoint`、`heartbeat_interval_ms`、`status_collect_interval_ms`。
+
+## owt-agent 进程内无文件写入约束
+
+- 约束范围仅限 `owt-agent` 进程自身：不允许业务日志或运行态数据写入本地文件。
+- `stdout/stderr` 输出允许保留；外部组件（如 `procd/logd`）的持久化策略不在该约束范围内。
+
+配套双验收（仅在 `BUILD_TESTING=ON` 时生效）：
+
+1. `owt-agent-no-file-write-static`：静态扫描 `owt-agent/src`、`owt-agent/include`，拦截文件写相关 API 与 spdlog file sink。
+2. `owt-agent-no-file-write-runtime`：基于 `strace` 跟踪运行测试二进制，发现文件系统变更类 syscall 即失败。
+
+相关 CMake 选项：
+
+- `OWT_AGENT_ENABLE_NO_FILE_WRITE_CHECKS=ON|OFF`（默认 `ON`）：总开关。
+- `OWT_AGENT_ENABLE_NO_FILE_WRITE_RUNTIME_CHECK=ON|OFF`（默认 `ON`）：运行期 `strace` 验收开关。
+- 当运行期开关为 `ON` 且 `BUILD_TESTING=ON` 时，若环境缺少 `strace`，配置阶段会直接失败。

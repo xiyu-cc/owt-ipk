@@ -2,6 +2,8 @@
 
 #include "app/config.h"
 
+#include <memory>
+
 namespace app::bootstrap {
 
 class RuntimeImpl {
@@ -16,7 +18,7 @@ public:
 
 private:
   struct State;
-  State* state_ = nullptr;
+  std::unique_ptr<State> state_;
 };
 
 } // namespace app::bootstrap

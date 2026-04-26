@@ -1,5 +1,7 @@
 #include "control/agent_runtime.h"
 
+#include "control/default_command_executors.h"
+#include "control/default_control_channel_factory.h"
 #include "log.h"
 
 #include <algorithm>
@@ -38,21 +40,21 @@ std::string request_id_to_text(const nlohmann::json& request_id) {
 } // namespace
 
 agent_runtime::agent_runtime()
-    : agent_runtime(std::make_unique<wss_control_channel>()) {}
+    : agent_runtime(make_default_control_channel()) {}
 
 agent_runtime::agent_runtime(std::unique_ptr<i_control_channel> channel)
     : agent_runtime(
           std::move(channel),
-          std::make_shared<agent_command_executor_registry>(),
+          make_default_command_executor_registry(),
           agent_runtime_heartbeat_builder{}) {}
 
 agent_runtime::agent_runtime(
     std::unique_ptr<i_control_channel> channel,
     std::shared_ptr<agent_command_executor_registry> executor_registry,
     agent_runtime_heartbeat_builder heartbeat_builder)
-    : wss_channel_(channel ? std::move(channel) : std::make_unique<wss_control_channel>()),
+    : control_channel_(channel ? std::move(channel) : make_default_control_channel()),
       executor_registry_(executor_registry ? std::move(executor_registry)
-                                           : std::make_shared<agent_command_executor_registry>()),
+                                           : make_default_command_executor_registry()),
       heartbeat_builder_(std::move(heartbeat_builder)),
       message_router_(current_protocol_version()) {}
 
@@ -78,7 +80,7 @@ bool agent_runtime::start(const agent_runtime_options& options) {
     return false;
   }
 
-  if (!start_channel(*wss_channel_, options_.wss_endpoint)) {
+  if (!start_channel(*control_channel_, options_.wss_endpoint)) {
     event_dispatcher_.stop();
     running_.store(false, std::memory_order_relaxed);
     log::error("agent runtime start failed: wss channel unavailable");
@@ -103,7 +105,7 @@ bool agent_runtime::start(const agent_runtime_options& options) {
         on_execute_exception(request_id, cmd, exception_ptr);
       });
   if (!worker_started) {
-    wss_channel_->stop();
+    control_channel_->stop();
     event_dispatcher_.stop();
     running_.store(false, std::memory_order_relaxed);
     log::error("agent runtime start failed: execution worker unavailable");
@@ -119,8 +121,8 @@ void agent_runtime::stop() {
     return;
   }
 
-  if (wss_channel_) {
-    wss_channel_->stop();
+  if (control_channel_) {
+    control_channel_->stop();
   }
   event_dispatcher_.stop();
   execution_worker_.stop();
@@ -147,7 +149,7 @@ bool agent_runtime::send_control_message(
     message_type type,
     const nlohmann::json& request_id,
     payload_variant data) {
-  auto* ch = wss_channel_.get();
+  auto* ch = control_channel_.get();
   if (ch == nullptr || !ch->is_running()) {
     log::warn("send message skipped: channel unavailable");
     return false;

@@ -113,10 +113,15 @@ add_executable(${OWT_AGENT_PROTOCOL_TEST_TARGET}
   ../owt-agent/tests/agent_protocol_tests.cpp
   ../owt-agent/src/core/control/control_protocol.cpp
   ../owt-agent/src/core/control/control_json_codec.cpp
+  ../owt-agent/src/core/control/json_codec/json_codec_field_rules.cpp
+  ../owt-agent/src/core/control/json_codec/json_codec_payload.cpp
+  ../owt-agent/src/core/control/json_codec/json_codec_envelope.cpp
 )
 target_include_directories(${OWT_AGENT_PROTOCOL_TEST_TARGET}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../owt-agent/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../owt-agent/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../owt-agent/src/core
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${OWT_PROTOCOL_INCLUDE_DIR}
 )

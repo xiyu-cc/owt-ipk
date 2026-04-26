@@ -12,12 +12,17 @@ include $(INCLUDE_DIR)/package.mk
 
 OWT_AGENT_INCLUDE_DIR:=$(if $(wildcard ../../include/include),../../include/include,../../include)
 OWT_AGENT_SRC_DIR:=$(if $(wildcard ../../src/src),../../src/src,../../src)
+OWT_AGENT_TP_SOURCE:=$(strip $(OWT_AGENT_TP_SOURCE))
+
+ifeq ($(OWT_AGENT_TP_SOURCE),)
+$(error OWT_AGENT_TP_SOURCE is required and must point to the owt third_party directory)
+endif
 
 define Package/$(PKG_NAME)
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=OWT gateway execution agent
-  DEPENDS:=+libstdcpp +libssh2 +libopenssl
+  DEPENDS:=+libstdcpp +libssh2 +libopenssl +libuuid
 endef
 
 define Package/$(PKG_NAME)/description
@@ -32,10 +37,10 @@ define Build/Prepare
 	$(CP) ./CMakeLists.txt $(PKG_BUILD_DIR)/
 	$(CP) ./cmake $(PKG_BUILD_DIR)/
 	mkdir -p $(PKG_BUILD_DIR)/third_party $(PKG_BUILD_DIR)/owt-protocol
-	$(CP) ../../../owt-net/third_party/spdlog $(PKG_BUILD_DIR)/third_party/
-	$(CP) ../../../owt-net/third_party/nlohmann $(PKG_BUILD_DIR)/third_party/
-	$(CP) ../../../owt-net/third_party/jsoncpp $(PKG_BUILD_DIR)/third_party/
-	$(CP) ../../../owt-net/third_party/drogon $(PKG_BUILD_DIR)/third_party/
+	$(CP) $(OWT_AGENT_TP_SOURCE)/spdlog $(PKG_BUILD_DIR)/third_party/
+	$(CP) $(OWT_AGENT_TP_SOURCE)/nlohmann $(PKG_BUILD_DIR)/third_party/
+	$(CP) $(OWT_AGENT_TP_SOURCE)/jsoncpp $(PKG_BUILD_DIR)/third_party/
+	$(CP) $(OWT_AGENT_TP_SOURCE)/drogon $(PKG_BUILD_DIR)/third_party/
 	$(CP) ../../../owt-protocol/include $(PKG_BUILD_DIR)/owt-protocol/
 endef
 
@@ -50,12 +55,15 @@ define Build/Compile
 			-DCMAKE_C_FLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
 			-DCMAKE_CXX_FLAGS="$(TARGET_CXXFLAGS) $(TARGET_CPPFLAGS)" \
 			-DCMAKE_EXE_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
-			-DCMAKE_SHARED_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
-			-DCMAKE_MODULE_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
-			-DOWT_AGENT_REQUIRE_LIBSSH2=ON \
-			-DOWT_AGENT_ALLOW_SSH_STUB=OFF \
-			-DUUID_DIR="$(STAGING_DIR)/usr" \
-			-DUUID_INCLUDE_DIR="$(STAGING_DIR)/usr/include/uuid" \
+				-DCMAKE_SHARED_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
+				-DCMAKE_MODULE_LINKER_FLAGS="$(TARGET_LDFLAGS)" \
+				-DOWT_AGENT_REQUIRE_LIBSSH2=ON \
+				-DOWT_AGENT_ALLOW_SSH_STUB=OFF \
+				-DLIBSSH2_INCLUDE_DIR="$(STAGING_DIR)/usr/include" \
+				-DLIBSSH2_LIBRARY="$(STAGING_DIR)/usr/lib/libssh2.so" \
+				-DOWT_AGENT_TP_ROOT="$(PKG_BUILD_DIR)/third_party" \
+				-DUUID_DIR="$(STAGING_DIR)/usr" \
+				-DUUID_INCLUDE_DIR="$(STAGING_DIR)/usr/include/uuid" \
 			-DUUID_LIBRARY="$(STAGING_DIR)/usr/lib/libuuid.so" \
 			-DUUID_INCLUDE_DIRS="$(STAGING_DIR)/usr/include/uuid" \
 			-DUUID_LIBRARIES="$(STAGING_DIR)/usr/lib/libuuid.so")

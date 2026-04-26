@@ -4,8 +4,8 @@
 #include "control/agent_runtime_execution_worker.h"
 #include "control/agent_runtime_heartbeat_builder.h"
 #include "control/agent_runtime_message_router.h"
+#include "control/i_control_channel.h"
 #include "control/runtime_event_dispatcher.h"
-#include "control/wss_control_channel.h"
 
 #include <atomic>
 #include <memory>
@@ -72,7 +72,7 @@ private:
   void enqueue_command(const nlohmann::json& request_id, const command& cmd);
 
 private:
-  std::unique_ptr<i_control_channel> wss_channel_;
+  std::unique_ptr<i_control_channel> control_channel_;
   std::shared_ptr<agent_command_executor_registry> executor_registry_;
   agent_runtime_heartbeat_builder heartbeat_builder_;
   agent_runtime_message_router message_router_;

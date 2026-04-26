@@ -19,6 +19,6 @@ struct Config {
   AgentConfig agent;
 };
 
-Config loadConfig(const std::string& path);
+Config load_config(const std::string& path);
 
 } // namespace owt_agent

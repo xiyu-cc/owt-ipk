@@ -25,6 +25,15 @@ if [[ -z "${SDK_DIR}" || ! -d "${SDK_DIR}" ]]; then
   exit 1
 fi
 
+if [[ -z "${OWT_AGENT_TP_SOURCE:-}" ]]; then
+  echo "OWT_AGENT_TP_SOURCE is required (point it to the owt third_party directory)." >&2
+  exit 4
+fi
+if [[ ! -d "${OWT_AGENT_TP_SOURCE}/spdlog" || ! -d "${OWT_AGENT_TP_SOURCE}/nlohmann" || ! -d "${OWT_AGENT_TP_SOURCE}/jsoncpp" || ! -d "${OWT_AGENT_TP_SOURCE}/drogon" ]]; then
+  echo "OWT_AGENT_TP_SOURCE='${OWT_AGENT_TP_SOURCE}' is missing required third_party components." >&2
+  exit 4
+fi
+
 echo "[clean] Purge old release artifacts -> ${OWT_OUT_ROOT}"
 find "${OWT_OUT_ROOT}" -maxdepth 1 -type f \( -name '*.deb' -o -name 'owt-agent*.ipk' \) -delete 2>/dev/null || true
 
@@ -68,9 +77,9 @@ find "${SDK_DIR}/bin/packages" -type f -name 'owt-agent*.ipk' -delete 2>/dev/nul
 find "${OWT_OUT_ROOT}" -maxdepth 1 -type f -name 'owt-agent*.ipk' -delete 2>/dev/null || true
 
 echo "[clean] Force OpenWrt package clean target: ${OWT_AGENT_CLEAN_TARGET}"
-make -C "${SDK_DIR}" "${OWT_AGENT_CLEAN_TARGET}" -j"$(nproc)"
+make -C "${SDK_DIR}" OWT_AGENT_TP_SOURCE="${OWT_AGENT_TP_SOURCE}" "${OWT_AGENT_CLEAN_TARGET}" -j"$(nproc)"
 
-make -C "${SDK_DIR}" "${OWT_AGENT_BUILD_TARGET}" -j"$(nproc)"
+make -C "${SDK_DIR}" OWT_AGENT_TP_SOURCE="${OWT_AGENT_TP_SOURCE}" "${OWT_AGENT_BUILD_TARGET}" -j"$(nproc)"
 
 mapfile -t IPK_FILES < <(find "${SDK_DIR}/bin/packages" -type f -name 'owt-agent*.ipk' | sort)
 if [[ ${#IPK_FILES[@]} -eq 0 ]]; then

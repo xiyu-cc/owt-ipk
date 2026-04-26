@@ -1,30 +1,22 @@
 #pragma once
 
-#include "service/host_probe_agent.h"
+#include "control/ports/interfaces.h"
 
-#include <functional>
+#include <memory>
 
 #include <nlohmann/json.hpp>
 
 namespace control {
 
-struct agent_runtime_heartbeat_builder_deps {
-  std::function<service::host_probe_snapshot()> get_host_probe_snapshot;
-  std::function<bool()> is_monitoring_enabled;
-};
-
 class agent_runtime_heartbeat_builder {
 public:
-  explicit agent_runtime_heartbeat_builder(agent_runtime_heartbeat_builder_deps deps = {});
+  explicit agent_runtime_heartbeat_builder(
+      std::shared_ptr<ports::i_agent_service_port> service_port = {});
 
   nlohmann::json build_stats() const;
 
 private:
-  static nlohmann::json snapshot_to_json(
-      const service::host_probe_snapshot& snap,
-      bool monitoring_enabled);
-
-  agent_runtime_heartbeat_builder_deps deps_;
+  std::shared_ptr<ports::i_agent_service_port> service_port_;
 };
 
 } // namespace control

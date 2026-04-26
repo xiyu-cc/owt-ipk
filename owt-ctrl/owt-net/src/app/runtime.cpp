@@ -3,21 +3,20 @@
 #include "app/bootstrap/runtime_impl.h"
 
 #include <cstdlib>
+#include <memory>
 
 namespace app {
 
-Runtime::Runtime(const Config& config) : impl_(new bootstrap::RuntimeImpl(config)) {}
+Runtime::Runtime(const Config& config)
+    : impl_(std::make_unique<bootstrap::RuntimeImpl>(config)) {}
 
-Runtime::~Runtime() {
-  delete static_cast<bootstrap::RuntimeImpl*>(impl_);
-  impl_ = nullptr;
-}
+Runtime::~Runtime() = default;
 
 int Runtime::run() {
-  if (impl_ == nullptr) {
+  if (!impl_) {
     return EXIT_FAILURE;
   }
-  return static_cast<bootstrap::RuntimeImpl*>(impl_)->run();
+  return impl_->run();
 }
 
 } // namespace app
