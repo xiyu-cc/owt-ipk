@@ -12,12 +12,8 @@ std::string to_string(CommandKind value) {
       return "host_reboot";
     case CommandKind::HostPoweroff:
       return "host_poweroff";
-    case CommandKind::HostProbeGet:
-      return "host_probe_get";
     case CommandKind::MonitoringSet:
       return "monitoring_set";
-    case CommandKind::ParamsGet:
-      return "params_get";
     case CommandKind::ParamsSet:
       return "params_set";
   }
@@ -61,16 +57,8 @@ bool try_parse_command_kind(std::string_view text, CommandKind& out) {
     out = CommandKind::HostPoweroff;
     return true;
   }
-  if (text == "host_probe_get" || text == "HOST_PROBE_GET") {
-    out = CommandKind::HostProbeGet;
-    return true;
-  }
   if (text == "monitoring_set" || text == "MONITORING_SET") {
     out = CommandKind::MonitoringSet;
-    return true;
-  }
-  if (text == "params_get" || text == "PARAMS_GET") {
-    out = CommandKind::ParamsGet;
     return true;
   }
   if (text == "params_set" || text == "PARAMS_SET") {

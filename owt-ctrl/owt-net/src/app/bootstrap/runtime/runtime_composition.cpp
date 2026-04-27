@@ -37,7 +37,6 @@ RuntimeComposition::RuntimeComposition(const Config& cfg)
           clock),
       control_ws_use_cases(registry_service, agent_message_service),
       retry_service(store, agent_channel, status_publisher, metrics, clock),
-      audit_query_service(store),
       lifecycle(
           RuntimeLifecycle::Options{
               .retry_tick_ms = config.server.retry_tick_ms,
@@ -60,7 +59,6 @@ RuntimeComposition::RuntimeComposition(const Config& cfg)
           params_service,
           rate_limiter_service,
           command_orchestrator,
-          audit_query_service,
           redaction_service,
           metrics,
           clock),

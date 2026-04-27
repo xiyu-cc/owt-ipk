@@ -14,7 +14,7 @@ namespace ctrl::application {
 
 struct SubmitCommandInput {
   domain::AgentRef agent;
-  domain::CommandKind kind = domain::CommandKind::HostProbeGet;
+  domain::CommandKind kind = domain::CommandKind::WakeOnLan;
   nlohmann::json payload = nlohmann::json::object();
   int timeout_ms = 5000;
   int max_retry = 1;

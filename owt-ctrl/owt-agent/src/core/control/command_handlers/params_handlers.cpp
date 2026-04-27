@@ -4,23 +4,6 @@
 
 namespace control::command_handlers {
 
-command_executor make_params_get_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port) {
-  return [service_port](const command&, const nlohmann::json&) {
-    command_execution_result out;
-    if (!service_port) {
-      out.status = command_status::failed;
-      out.exit_code = -1;
-      out.result = nlohmann::json{{"error", "service port unavailable"}};
-      return out;
-    }
-
-    out.status = command_status::succeeded;
-    out.exit_code = 0;
-    out.result = ports::control_params_to_json(service_port->load_params());
-    return out;
-  };
-}
-
 command_executor make_params_set_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port) {
   return [service_port](const command&, const nlohmann::json& payload) {
     command_execution_result out;

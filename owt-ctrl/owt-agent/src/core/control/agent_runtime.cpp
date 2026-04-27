@@ -181,9 +181,7 @@ bool agent_runtime::send_register() {
           {"wol_wake",
            "host_reboot",
            "host_poweroff",
-           "host_probe_get",
            "monitoring_set",
-           "params_get",
            "params_set"}});
 }
 

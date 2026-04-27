@@ -10,15 +10,10 @@ assert.equal(WS_UI_PATH, '/ws/v5/ui')
 
 assert.deepEqual(Object.values(COMMAND_BUS_ACTIONS), [
   'session.subscribe',
-  'session.unsubscribe',
   'agent.list',
-  'agent.get',
   'params.get',
   'params.update',
-  'command.submit',
-  'command.get',
-  'command.list',
-  'audit.list'
+  'command.submit'
 ])
 
 assert.deepEqual(Object.values(COMMAND_BUS_EVENTS), [

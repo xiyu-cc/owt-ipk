@@ -75,7 +75,7 @@ ws.emitMessage(
       resource: {
         command: {
           command_id: 'cmd-1',
-          command_type: 'host_probe_get',
+          command_type: 'host_reboot',
           agent_mac: 'AA:00:00:00:90:01'
         },
         event: {

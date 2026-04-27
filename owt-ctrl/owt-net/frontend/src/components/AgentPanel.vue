@@ -14,18 +14,24 @@ function onSelect(event) {
 </script>
 
 <template>
-  <section class="card">
-    <h2>Agent</h2>
-    <div class="row">
-      <label for="agent">目标 Agent</label>
-      <select id="agent" :value="props.selectedAgentMac" @change="onSelect" :disabled="props.loading">
-        <option v-if="!props.agents.length" value="">暂无 agent</option>
+  <div>
+    <div class="agent-row">
+      <label for="agent-select">目标 Agent</label>
+      <select
+        id="agent-select"
+        :value="props.selectedAgentMac"
+        @change="onSelect"
+        :disabled="props.loading"
+      >
+        <option value="" disabled>{{ props.agents.length ? '请选择 Agent' : '暂无 agent' }}</option>
         <option v-for="item in props.agents" :key="item.agent_mac" :value="item.agent_mac">
-          {{ item.agent_id || item.agent_mac }} ({{ item.online ? 'online' : 'offline' }})
+          {{ item.agent_id || item.agent_mac }} · {{ item.online ? '在线' : '离线' }}
         </option>
       </select>
-      <button class="btn" type="button" @click="emit('refresh')" :disabled="props.loading">刷新</button>
+      <button class="ghost agent-refresh" type="button" @click="emit('refresh')" :disabled="props.loading">刷新</button>
     </div>
-    <p class="hint">ws: {{ props.connected ? 'connected' : 'disconnected' }}</p>
-  </section>
+
+    <p v-if="!props.agents.length" class="hint">暂无 Agent，可先启动 `owt-agent` 并完成 REGISTER。</p>
+    <p v-else class="hint">ws: {{ props.connected ? 'connected' : 'disconnected' }}</p>
+  </div>
 </template>

@@ -14,9 +14,7 @@ enum class CommandKind {
   WakeOnLan,
   HostReboot,
   HostPoweroff,
-  HostProbeGet,
   MonitoringSet,
-  ParamsGet,
   ParamsSet,
 };
 
@@ -46,7 +44,7 @@ struct AgentRef {
 struct CommandSpec {
   std::string command_id;
   std::string trace_id;
-  CommandKind kind = CommandKind::HostProbeGet;
+  CommandKind kind = CommandKind::WakeOnLan;
   nlohmann::json payload = nlohmann::json::object();
   int timeout_ms = 5000;
   int max_retry = 0;

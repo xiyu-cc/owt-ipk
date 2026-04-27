@@ -89,7 +89,7 @@ void test_ack_running_result_sequence() {
 
   control::agent_runtime runtime(std::move(channel));
   runtime.register_command_executor(
-      control::command_type::host_probe_get,
+      control::command_type::host_reboot,
       [](const control::command&, const nlohmann::json&) {
         control::command_execution_result out;
         out.status = control::command_status::succeeded;
@@ -108,7 +108,7 @@ void test_ack_running_result_sequence() {
   control::command cmd;
   cmd.command_id = "cmd-1";
   cmd.idempotency_key = "cmd-1";
-  cmd.type = control::command_type::host_probe_get;
+  cmd.type = control::command_type::host_reboot;
   cmd.issued_at_ms = control::unix_time_ms_now();
   cmd.expires_at_ms = cmd.issued_at_ms + 60000;
   cmd.timeout_ms = 5000;

@@ -4,25 +4,6 @@
 
 namespace control::command_handlers {
 
-command_executor make_host_probe_get_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port) {
-  return [service_port](const command&, const nlohmann::json&) {
-    command_execution_result out;
-    if (!service_port) {
-      out.status = command_status::failed;
-      out.exit_code = -1;
-      out.result = nlohmann::json{{"error", "service port unavailable"}};
-      return out;
-    }
-
-    out.status = command_status::succeeded;
-    out.exit_code = 0;
-    out.result = ports::host_probe_snapshot_to_json(
-        service_port->get_host_probe_snapshot(),
-        service_port->is_monitoring_enabled());
-    return out;
-  };
-}
-
 command_executor make_monitoring_set_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port) {
   return [service_port](const command&, const nlohmann::json& payload) {
     command_execution_result out;

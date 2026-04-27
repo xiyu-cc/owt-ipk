@@ -19,15 +19,10 @@ inline constexpr std::string_view kError = "error";
 namespace ui {
 
 inline constexpr std::string_view kActionSessionSubscribe = "session.subscribe";
-inline constexpr std::string_view kActionSessionUnsubscribe = "session.unsubscribe";
 inline constexpr std::string_view kActionAgentList = "agent.list";
-inline constexpr std::string_view kActionAgentGet = "agent.get";
 inline constexpr std::string_view kActionParamsGet = "params.get";
 inline constexpr std::string_view kActionParamsUpdate = "params.update";
 inline constexpr std::string_view kActionCommandSubmit = "command.submit";
-inline constexpr std::string_view kActionCommandGet = "command.get";
-inline constexpr std::string_view kActionCommandList = "command.list";
-inline constexpr std::string_view kActionAuditList = "audit.list";
 
 inline constexpr std::string_view kEventAgentSnapshot = "agent.snapshot";
 inline constexpr std::string_view kEventAgentUpdate = "agent.update";

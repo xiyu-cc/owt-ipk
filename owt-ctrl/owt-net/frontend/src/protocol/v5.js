@@ -10,15 +10,10 @@ export const BUS_KINDS = Object.freeze({
 
 export const COMMAND_BUS_ACTIONS = Object.freeze({
   SESSION_SUBSCRIBE: 'session.subscribe',
-  SESSION_UNSUBSCRIBE: 'session.unsubscribe',
   AGENT_LIST: 'agent.list',
-  AGENT_GET: 'agent.get',
   PARAMS_GET: 'params.get',
   PARAMS_UPDATE: 'params.update',
-  COMMAND_SUBMIT: 'command.submit',
-  COMMAND_GET: 'command.get',
-  COMMAND_LIST: 'command.list',
-  AUDIT_LIST: 'audit.list'
+  COMMAND_SUBMIT: 'command.submit'
 })
 
 export const COMMAND_BUS_EVENTS = Object.freeze({

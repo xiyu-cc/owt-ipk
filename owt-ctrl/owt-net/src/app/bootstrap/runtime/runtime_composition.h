@@ -10,7 +10,6 @@
 #include "ctrl/adapters/control_ws_use_cases.h"
 #include "ctrl/application/agent_message_service.h"
 #include "ctrl/application/agent_registry_service.h"
-#include "ctrl/application/audit_query_service.h"
 #include "ctrl/application/command_orchestrator.h"
 #include "ctrl/application/params_service.h"
 #include "ctrl/application/rate_limiter_service.h"
@@ -70,7 +69,6 @@ public:
   ctrl::application::AgentMessageService agent_message_service;
   ctrl::adapters::ControlWsUseCases control_ws_use_cases;
   ctrl::application::RetryService retry_service;
-  ctrl::application::AuditQueryService audit_query_service;
   RuntimeLifecycle lifecycle;
   UiActionGateway ui_gateway;
   AgentActionGateway agent_gateway;

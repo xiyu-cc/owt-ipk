@@ -74,12 +74,8 @@ std::string to_string(command_type value) {
       return "host_reboot";
     case command_type::host_poweroff:
       return "host_poweroff";
-    case command_type::host_probe_get:
-      return "host_probe_get";
     case command_type::monitoring_set:
       return "monitoring_set";
-    case command_type::params_get:
-      return "params_get";
     case command_type::params_set:
       return "params_set";
   }
@@ -99,16 +95,8 @@ bool try_parse_command_type(const std::string& text, command_type& out) {
     out = command_type::host_poweroff;
     return true;
   }
-  if (text == "host_probe_get" || text == "HOST_PROBE_GET") {
-    out = command_type::host_probe_get;
-    return true;
-  }
   if (text == "monitoring_set" || text == "MONITORING_SET") {
     out = command_type::monitoring_set;
-    return true;
-  }
-  if (text == "params_get" || text == "PARAMS_GET") {
-    out = command_type::params_get;
     return true;
   }
   if (text == "params_set" || text == "PARAMS_SET") {

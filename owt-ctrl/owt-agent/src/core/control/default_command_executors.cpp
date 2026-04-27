@@ -34,9 +34,7 @@ void install_default_command_executors(
   registry.register_executor(command_type::wol_wake, command_handlers::make_wol_wake_handler(resolved));
   registry.register_executor(command_type::host_reboot, command_handlers::make_host_reboot_handler(resolved));
   registry.register_executor(command_type::host_poweroff, command_handlers::make_host_poweroff_handler(resolved));
-  registry.register_executor(command_type::host_probe_get, command_handlers::make_host_probe_get_handler(resolved));
   registry.register_executor(command_type::monitoring_set, command_handlers::make_monitoring_set_handler(resolved));
-  registry.register_executor(command_type::params_get, command_handlers::make_params_get_handler(resolved));
   registry.register_executor(command_type::params_set, command_handlers::make_params_set_handler(resolved));
 }
 

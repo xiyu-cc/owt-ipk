@@ -61,26 +61,6 @@ SubmitCommandOutput CommandOrchestrator::submit(const SubmitCommandInput& in) {
   snapshot.created_at_ms = now_ms;
   snapshot.updated_at_ms = now_ms;
 
-  if (spec.kind == domain::CommandKind::ParamsGet) {
-    snapshot.result = params_.load_or_init(in.agent.mac);
-    snapshot.state = domain::CommandState::Succeeded;
-    std::string error;
-    if (!commands_.upsert(snapshot, error)) {
-      throw std::runtime_error("persist command failed: " + error);
-    }
-    const auto event = append_event(
-        spec.command_id,
-        "command_result_local",
-        snapshot.state,
-        nlohmann::json{{"trace_id", spec.trace_id}, {"source", "orchestrator"}},
-        now_ms);
-    publisher_.publish_command_event(snapshot, event);
-    metrics_.record_command_terminal_status(spec.command_id, snapshot.state, snapshot.result);
-    append_audit(in, spec, now_ms);
-    publisher_.publish_snapshot("command_result_local", in.agent.mac);
-    return to_submit_output(snapshot, false);
-  }
-
   if (spec.kind == domain::CommandKind::ParamsSet) {
     const auto merged = params_.merge_and_validate(in.agent.mac, spec.payload);
     params_.save(in.agent.mac, merged);

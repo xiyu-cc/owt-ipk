@@ -46,7 +46,28 @@ void SqliteStore::migrate() {
     }
   }
 
+  const auto assert_no_removed_command_types = [this, &error]() {
+    statement stmt;
+    if (!prepare(
+            db_,
+            "SELECT COUNT(1) FROM commands WHERE command_type IN ('host_probe_get','params_get');",
+            stmt,
+            error)) {
+      throw std::runtime_error("inspect removed command types failed: " + error);
+    }
+    if (sqlite3_step(stmt.ptr) != SQLITE_ROW) {
+      throw std::runtime_error("inspect removed command types failed: no row returned");
+    }
+    const auto count = sqlite3_column_int64(stmt.ptr, 0);
+    if (count > 0) {
+      throw std::runtime_error(
+          "legacy command_type detected in commands table (host_probe_get/params_get); "
+          "hard-delete mode requires manual cleanup before startup");
+    }
+  };
+
   if (current_schema_version == kTargetSchemaVersion) {
+    assert_no_removed_command_types();
     return;
   }
 
@@ -188,6 +209,8 @@ void SqliteStore::migrate() {
     rollback_tx(db_);
     throw std::runtime_error("commit migration failed: " + error);
   }
+
+  assert_no_removed_command_types();
 }
 
 void SqliteStore::cleanup_retention(int retention_days, int64_t now_ms) {

@@ -82,10 +82,10 @@
   - 心跳周期与采样周期独立配置。
 - 控制结果回传：
   - `command.submit` 使用异步受理语义（accepted + result-meta）。
-  - 终态通过 `command.event` 推送或 `command.get` 查询获取。
+  - 终态通过 `command.event` 推送获取。
 - 协议契约（v5）：
   - UI WS 路由：`/ws/v5/ui`，Agent WS 路由：`/ws/v5/agent`。
-  - UI action：`session.subscribe`、`session.unsubscribe`、`agent.list`、`agent.get`、`params.get`、`params.update`、`command.submit`、`command.get`、`command.list`、`audit.list`。
+  - UI action：`session.subscribe`、`agent.list`、`params.get`、`params.update`、`command.submit`。
   - UI event：`agent.snapshot`、`agent.update`、`command.event`。
   - 信封字段：`v/kind/name/id/ts_ms/payload/target`，其中 `v = "v5"`，`kind` 为 `action/result/event/error`。
   - Agent action：`agent.register`、`agent.heartbeat`、`command.ack`、`command.result`。

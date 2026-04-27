@@ -4,7 +4,6 @@
 #include "app/ws/command_bus_protocol.h"
 #include "app/ws/scheduler/event_scheduler.h"
 #include "ctrl/application/agent_registry_service.h"
-#include "ctrl/application/audit_query_service.h"
 #include "ctrl/application/command_orchestrator.h"
 #include "ctrl/application/params_service.h"
 #include "ctrl/application/rate_limiter_service.h"
@@ -28,7 +27,6 @@ public:
       ctrl::application::ParamsService& params_service,
       ctrl::application::RateLimiterService& rate_limiter_service,
       ctrl::application::CommandOrchestrator& command_orchestrator,
-      ctrl::application::AuditQueryService& audit_query_service,
       ctrl::application::RedactionService& redaction_service,
       ctrl::ports::IMetrics& metrics,
       const ctrl::ports::IClock& clock);
@@ -43,9 +41,6 @@ private:
       const std::string&,
       const std::string&,
       const ws::BusEnvelope&)>;
-
-  static bool parse_int(const nlohmann::json& value, int& out);
-  static bool parse_int64(const nlohmann::json& value, int64_t& out);
 
   void send_ui_result(
       std::string_view session_id,
@@ -69,15 +64,7 @@ private:
       const std::string& session_id,
       const std::string& actor_id,
       const ws::BusEnvelope& req);
-  void handle_session_unsubscribe(
-      const std::string& session_id,
-      const std::string& actor_id,
-      const ws::BusEnvelope& req);
   void handle_agent_list(
-      const std::string& session_id,
-      const std::string& actor_id,
-      const ws::BusEnvelope& req);
-  void handle_agent_get(
       const std::string& session_id,
       const std::string& actor_id,
       const ws::BusEnvelope& req);
@@ -93,18 +80,6 @@ private:
       const std::string& session_id,
       const std::string& actor_id,
       const ws::BusEnvelope& req);
-  void handle_command_get(
-      const std::string& session_id,
-      const std::string& actor_id,
-      const ws::BusEnvelope& req);
-  void handle_command_list(
-      const std::string& session_id,
-      const std::string& actor_id,
-      const ws::BusEnvelope& req);
-  void handle_audit_list(
-      const std::string& session_id,
-      const std::string& actor_id,
-      const ws::BusEnvelope& req);
 
   UiSubscriptionStore& subscriptions_;
   UiSessionRegistry& ui_sessions_;
@@ -114,7 +89,6 @@ private:
   ctrl::application::ParamsService& params_service_;
   ctrl::application::RateLimiterService& rate_limiter_service_;
   ctrl::application::CommandOrchestrator& command_orchestrator_;
-  ctrl::application::AuditQueryService& audit_query_service_;
   ctrl::application::RedactionService& redaction_service_;
   ctrl::ports::IMetrics& metrics_;
   const ctrl::ports::IClock& clock_;

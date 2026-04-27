@@ -73,7 +73,7 @@ void test_server_command_dispatch_decode() {
     "payload":{"command":{
       "command_id":"cmd-2",
       "idempotency_key":"cmd-2",
-      "command_type":"host_probe_get",
+      "command_type":"host_reboot",
       "issued_at_ms":100,
       "expires_at_ms":200,
       "timeout_ms":5000,
@@ -91,7 +91,7 @@ void test_server_command_dispatch_decode() {
   const auto* cmd = std::get_if<control::command>(&out.payload);
   require(cmd != nullptr, "dispatch command payload missing");
   require(cmd->command_id == "cmd-2", "dispatch command_id mismatch");
-  require(cmd->type == control::command_type::host_probe_get, "dispatch command_type mismatch");
+  require(cmd->type == control::command_type::host_reboot, "dispatch command_type mismatch");
 }
 
 void test_reject_kind_mismatch() {
@@ -104,7 +104,7 @@ void test_reject_kind_mismatch() {
     "payload":{"command":{
       "command_id":"cmd-x",
       "idempotency_key":"cmd-x",
-      "command_type":"host_probe_get",
+      "command_type":"host_reboot",
       "issued_at_ms":1,
       "expires_at_ms":2,
       "timeout_ms":1000,

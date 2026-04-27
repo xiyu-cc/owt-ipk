@@ -655,17 +655,6 @@ void test_command_orchestrator_submit() {
       retry_output.state == ctrl::domain::CommandState::RetryPending,
       "offline command should become retry pending");
 
-  ctrl::application::SubmitCommandInput params_get_input = wake_input;
-  params_get_input.kind = ctrl::domain::CommandKind::ParamsGet;
-  params_get_input.wait_result = true;
-  auto params_get_output = orchestrator.submit(params_get_input);
-  require(
-      params_get_output.state == ctrl::domain::CommandState::Succeeded,
-      "params_get should succeed locally");
-  require(params_get_output.terminal, "params_get should be terminal");
-  require(params_get_output.result.is_object(), "params_get should return object");
-  require(params_get_output.result.contains("wol"), "params_get result should include wol");
-
   channel.set_online("AA:00:00:00:10:01", true);
   ctrl::application::SubmitCommandInput params_set_input = wake_input;
   params_set_input.kind = ctrl::domain::CommandKind::ParamsSet;
@@ -785,7 +774,7 @@ void test_retry_service() {
   ctrl::domain::CommandSnapshot retry_pending;
   retry_pending.spec.command_id = "cmd-retry-1";
   retry_pending.spec.trace_id = "trc-retry-1";
-  retry_pending.spec.kind = ctrl::domain::CommandKind::HostProbeGet;
+  retry_pending.spec.kind = ctrl::domain::CommandKind::HostReboot;
   retry_pending.spec.max_retry = 3;
   retry_pending.spec.expires_at_ms = 3000 + 60000;
   retry_pending.agent = {"AA:00:00:00:30:01", "agent-30-01"};
@@ -813,7 +802,7 @@ void test_retry_service() {
   ctrl::domain::CommandSnapshot exhausted;
   exhausted.spec.command_id = "cmd-retry-exhausted";
   exhausted.spec.trace_id = "trc-retry-exhausted";
-  exhausted.spec.kind = ctrl::domain::CommandKind::HostProbeGet;
+  exhausted.spec.kind = ctrl::domain::CommandKind::HostReboot;
   exhausted.spec.max_retry = 1;
   exhausted.spec.expires_at_ms = clock.now_ms() + 60000;
   exhausted.agent = {"AA:00:00:00:30:02", "agent-30-02"};
@@ -938,7 +927,7 @@ void test_model_types_snake_case_mapping() {
       ctrl::domain::to_string(CommandState::RetryPending) == "retry_pending",
       "command state string should be snake_case");
 
-  CommandKind kind = CommandKind::HostProbeGet;
+  CommandKind kind = CommandKind::WakeOnLan;
   require(
       ctrl::domain::try_parse_command_kind("host_reboot", kind) && kind == CommandKind::HostReboot,
       "snake_case command kind parsing should succeed");
@@ -962,7 +951,7 @@ void test_command_bus_envelope_v5_codec() {
   in.name = std::string(owt::protocol::v5::ui::kActionCommandSubmit);
   in.id = "req-1";
   in.ts_ms = 123456;
-  in.payload = nlohmann::json{{"agent_mac", "AA:00:00:00:10:01"}, {"command_type", "host_probe_get"}};
+  in.payload = nlohmann::json{{"agent_mac", "AA:00:00:00:10:01"}, {"command_type", "host_reboot"}};
   in.target = "AA:00:00:00:10:01";
 
   const auto encoded = app::ws::encode_bus_envelope(in);
@@ -1038,7 +1027,7 @@ void test_control_ws_use_cases_v5_contract() {
           ctrl::domain::CommandState::Created,
           "",
           0,
-          nlohmann::json{{"site_id", "lab-50"}, {"capabilities", {"host_probe_get"}}}},
+          nlohmann::json{{"site_id", "lab-50"}, {"capabilities", {"host_reboot"}}}},
       ws_out);
   require(ws_out.size() == 1, "register should produce one reply");
   require(
@@ -1053,7 +1042,7 @@ void test_control_ws_use_cases_v5_contract() {
   ctrl::domain::CommandSnapshot seeded;
   seeded.spec.command_id = "cmd-ws-usecase-result";
   seeded.spec.trace_id = "trc-ws-usecase-result";
-  seeded.spec.kind = ctrl::domain::CommandKind::HostProbeGet;
+  seeded.spec.kind = ctrl::domain::CommandKind::HostReboot;
   seeded.agent = {"AA:00:00:00:50:01", "agent-50-01"};
   seeded.state = ctrl::domain::CommandState::Dispatched;
   seeded.created_at_ms = 5001;

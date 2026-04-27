@@ -23,9 +23,7 @@ enum class command_type {
   wol_wake,
   host_reboot,
   host_poweroff,
-  host_probe_get,
   monitoring_set,
-  params_get,
   params_set,
 };
 
@@ -75,7 +73,7 @@ struct register_ack_payload {
 struct command {
   std::string command_id;
   std::string idempotency_key;
-  command_type type = command_type::host_probe_get;
+  command_type type = command_type::wol_wake;
   int64_t issued_at_ms = 0;
   int64_t expires_at_ms = 0;
   int timeout_ms = 0;

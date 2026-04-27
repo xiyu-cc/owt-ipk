@@ -10,9 +10,7 @@ namespace control::command_handlers {
 command_executor make_wol_wake_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port);
 command_executor make_host_reboot_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port);
 command_executor make_host_poweroff_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port);
-command_executor make_host_probe_get_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port);
 command_executor make_monitoring_set_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port);
-command_executor make_params_get_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port);
 command_executor make_params_set_handler(const std::shared_ptr<ports::i_agent_service_port>& service_port);
 
 } // namespace control::command_handlers
