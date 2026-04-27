@@ -19,6 +19,11 @@ public:
   bool is_running() const noexcept override;
 
 private:
+  struct queued_message {
+    std::string payload;
+    bool drop_if_disconnected = false;
+  };
+
   struct impl;
 
   void start_connect_loop();
@@ -35,7 +40,7 @@ private:
   bool connected_ = false;
   channel_start_options options_;
   channel_callbacks callbacks_;
-  std::deque<std::string> outgoing_messages_;
+  std::deque<queued_message> outgoing_messages_;
   std::shared_ptr<impl> impl_;
 };
 

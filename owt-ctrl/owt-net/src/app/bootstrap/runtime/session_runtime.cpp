@@ -169,21 +169,23 @@ bool UiSessionRegistry::enqueue(std::string_view session_id, std::string payload
     session = it->second;
   }
 
-  std::unique_lock<std::mutex> lk(session->mutex);
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(cfg_.send_timeout_ms);
-  while (!session->closed && static_cast<int>(session->queue.size()) >= cfg_.queue_limit) {
-    if (session->cv.wait_until(lk, deadline) == std::cv_status::timeout) {
-      lk.unlock();
-      shutdown_session(session, "ui send timeout");
+  bool queue_overflow = false;
+  {
+    std::lock_guard<std::mutex> lk(session->mutex);
+    if (session->closed) {
       return false;
     }
+    if (static_cast<int>(session->queue.size()) >= cfg_.queue_limit) {
+      queue_overflow = true;
+    } else {
+      session->queue.push_back(std::move(payload));
+    }
   }
-  if (session->closed) {
+  if (queue_overflow) {
+    shutdown_session(session, "ui queue overflow");
     return false;
   }
-  session->queue.push_back(std::move(payload));
-  lk.unlock();
-  session->cv.notify_all();
+  session->cv.notify_one();
   return true;
 }
 
@@ -426,10 +428,7 @@ BusStatusPublisher::BusStatusPublisher(
       ui_sessions_(ui_sessions),
       event_scheduler_(event_scheduler) {}
 
-void BusStatusPublisher::push_snapshot_to_session(std::string_view session_id, std::string_view reason) {
-  if (session_id.empty()) {
-    return;
-  }
+std::string BusStatusPublisher::build_snapshot_message(std::string_view reason) const {
   auto agents = registry_.list_agents(true);
   size_t online_count = 0;
   nlohmann::json rows = nlohmann::json::array();
@@ -448,21 +447,15 @@ void BusStatusPublisher::push_snapshot_to_session(std::string_view session_id, s
            {"total_count", agents.size()},
        }},
   };
-  const auto message = ws::bus_event(
+  return ws::bus_event(
       owt::protocol::v5::ui::kEventAgentSnapshot,
       clock_.now_ms(),
       payload);
-  (void)ui_sessions_.enqueue(session_id, message);
 }
 
-void BusStatusPublisher::push_agent_to_session(
-    std::string_view session_id,
-    std::string_view agent_mac,
-    std::string_view reason) {
-  if (session_id.empty() || agent_mac.empty()) {
-    return;
-  }
-
+std::string BusStatusPublisher::build_agent_message(
+    std::string_view reason,
+    std::string_view agent_mac) const {
   ctrl::domain::AgentState state;
   nlohmann::json resource = {
       {"agent_mac", std::string(agent_mac)},
@@ -479,33 +472,69 @@ void BusStatusPublisher::push_agent_to_session(
       {"resource", std::move(resource)},
   };
 
-  const auto message = ws::bus_event(
+  return ws::bus_event(
       owt::protocol::v5::ui::kEventAgentUpdate,
       clock_.now_ms(),
       payload,
       agent_mac);
+}
+
+void BusStatusPublisher::push_snapshot_to_session(std::string_view session_id, std::string_view reason) {
+  if (session_id.empty()) {
+    return;
+  }
+  const auto message = build_snapshot_message(reason);
+  (void)ui_sessions_.enqueue(session_id, message);
+}
+
+void BusStatusPublisher::push_agent_to_session(
+    std::string_view session_id,
+    std::string_view agent_mac,
+    std::string_view reason) {
+  if (session_id.empty() || agent_mac.empty()) {
+    return;
+  }
+  const auto message = build_agent_message(reason, agent_mac);
   (void)ui_sessions_.enqueue(session_id, message);
 }
 
 void BusStatusPublisher::publish_snapshot(std::string_view reason, std::string_view agent_mac) {
   const auto rows = subscriptions_.snapshot();
+  bool has_snapshot_subscribers = false;
+  bool has_agent_subscribers = false;
+  for (const auto& row : rows) {
+    if (row.second.scope == UiSubscriptionStore::Scope::All) {
+      has_snapshot_subscribers = true;
+      continue;
+    }
+    if (!agent_mac.empty() && row.second.agent_mac == agent_mac) {
+      has_agent_subscribers = true;
+    }
+  }
+
+  std::shared_ptr<const std::string> snapshot_message;
+  if (has_snapshot_subscribers) {
+    snapshot_message = std::make_shared<const std::string>(build_snapshot_message(reason));
+  }
+
+  std::shared_ptr<const std::string> agent_message;
+  if (has_agent_subscribers && !agent_mac.empty()) {
+    agent_message = std::make_shared<const std::string>(build_agent_message(reason, agent_mac));
+  }
+
   for (const auto& row : rows) {
     const auto session_id = row.first;
     const auto sub = row.second;
     const auto result = event_scheduler_.post(
         session_id,
         app::ws::scheduler::EventPriority::Low,
-        [this,
-         session_id,
-         sub,
-         reason = std::string(reason),
-         agent_mac = std::string(agent_mac)] {
-          if (sub.scope == UiSubscriptionStore::Scope::All) {
-            push_snapshot_to_session(session_id, reason);
+        [this, session_id, sub, agent_mac = std::string(agent_mac), snapshot_message, agent_message] {
+          if (sub.scope == UiSubscriptionStore::Scope::All && snapshot_message) {
+            (void)ui_sessions_.enqueue(session_id, *snapshot_message);
             return;
           }
-          if (!agent_mac.empty() && sub.agent_mac == agent_mac) {
-            push_agent_to_session(session_id, agent_mac, reason);
+          if (!agent_mac.empty() && sub.agent_mac == agent_mac && agent_message) {
+            (void)ui_sessions_.enqueue(session_id, *agent_message);
           }
         });
     if (result == app::ws::scheduler::PostResult::DroppedLowPriority) {

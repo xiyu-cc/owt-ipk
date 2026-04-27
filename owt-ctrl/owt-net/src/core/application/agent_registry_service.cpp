@@ -7,9 +7,18 @@ namespace ctrl::application {
 AgentRegistryService::AgentRegistryService(ports::IAgentRepository& repo, const ports::IClock& clock)
     : repo_(repo), clock_(clock) {}
 
-void AgentRegistryService::on_register(const domain::AgentState& register_state) {
+void AgentRegistryService::set_error(std::string* out, std::string&& value) {
+  if (out != nullptr) {
+    *out = std::move(value);
+  }
+}
+
+bool AgentRegistryService::on_register(
+    const domain::AgentState& register_state,
+    std::string* persist_error) {
   if (register_state.agent.mac.empty()) {
-    return;
+    set_error(persist_error, "agent_mac is required");
+    return false;
   }
 
   ensure_bootstrapped();
@@ -29,15 +38,20 @@ void AgentRegistryService::on_register(const domain::AgentState& register_state)
     state.last_heartbeat_at_ms = now;
   }
   states_[state.agent.mac] = state;
-  persist_unlocked(state);
+  std::string error;
+  const auto persisted = persist_unlocked(state, error);
+  set_error(persist_error, std::move(error));
+  return persisted;
 }
 
-void AgentRegistryService::on_heartbeat(
+bool AgentRegistryService::on_heartbeat(
     std::string_view agent_mac,
     const nlohmann::json& heartbeat_stats,
-    int64_t heartbeat_at_ms) {
+    int64_t heartbeat_at_ms,
+    std::string* persist_error) {
   if (agent_mac.empty()) {
-    return;
+    set_error(persist_error, "agent_mac is required");
+    return false;
   }
 
   ensure_bootstrapped();
@@ -55,11 +69,18 @@ void AgentRegistryService::on_heartbeat(
   if (state.registered_at_ms <= 0) {
     state.registered_at_ms = now;
   }
-  persist_unlocked(state);
+  std::string error;
+  const auto persisted = persist_unlocked(state, error);
+  set_error(persist_error, std::move(error));
+  return persisted;
 }
 
-bool AgentRegistryService::on_disconnect(std::string_view agent_mac, std::string_view session_token) {
+bool AgentRegistryService::on_disconnect(
+    std::string_view agent_mac,
+    std::string_view session_token,
+    std::string* persist_error) {
   if (agent_mac.empty()) {
+    set_error(persist_error, "agent_mac is required");
     return false;
   }
 
@@ -67,29 +88,39 @@ bool AgentRegistryService::on_disconnect(std::string_view agent_mac, std::string
   std::lock_guard<std::mutex> lk(mutex_);
   const auto it = states_.find(std::string(agent_mac));
   if (it == states_.end()) {
+    set_error(persist_error, "agent not found");
     return false;
   }
 
   const auto sit = sessions_.find(std::string(agent_mac));
   if (sit != sessions_.end() && !session_token.empty() && sit->second != session_token) {
+    set_error(persist_error, "session token mismatch");
     return false;
   }
 
   sessions_.erase(std::string(agent_mac));
   it->second.online = false;
   it->second.last_seen_at_ms = clock_.now_ms();
-  persist_unlocked(it->second);
-  return true;
+  std::string error;
+  const auto persisted = persist_unlocked(it->second, error);
+  set_error(persist_error, std::move(error));
+  return persisted;
 }
 
-void AgentRegistryService::bind_session(std::string_view agent_mac, std::string_view session_token) {
+bool AgentRegistryService::bind_session(
+    std::string_view agent_mac,
+    std::string_view session_token,
+    std::string* persist_error) {
   if (agent_mac.empty() || session_token.empty()) {
-    return;
+    set_error(persist_error, "agent_mac/session_token is required");
+    return false;
   }
 
   ensure_bootstrapped();
   std::lock_guard<std::mutex> lk(mutex_);
   sessions_[std::string(agent_mac)] = std::string(session_token);
+  set_error(persist_error, "");
+  return true;
 }
 
 bool AgentRegistryService::get_agent(std::string_view agent_mac, domain::AgentState& out) const {
@@ -141,6 +172,11 @@ size_t AgentRegistryService::online_count() const {
   return count;
 }
 
+uint64_t AgentRegistryService::persist_failure_count() const {
+  std::lock_guard<std::mutex> lk(mutex_);
+  return persist_failure_count_;
+}
+
 void AgentRegistryService::ensure_bootstrapped() const {
   std::lock_guard<std::mutex> lk(mutex_);
   if (bootstrapped_) {
@@ -160,9 +196,15 @@ void AgentRegistryService::ensure_bootstrapped() const {
   bootstrapped_ = true;
 }
 
-void AgentRegistryService::persist_unlocked(const domain::AgentState& state) {
-  std::string error;
-  (void)repo_.upsert(state, error);
+bool AgentRegistryService::persist_unlocked(const domain::AgentState& state, std::string& error) {
+  if (repo_.upsert(state, error)) {
+    return true;
+  }
+  ++persist_failure_count_;
+  if (error.empty()) {
+    error = "persist failed";
+  }
+  return false;
 }
 
 } // namespace ctrl::application

@@ -8,10 +8,13 @@
 #include "control/runtime_event_dispatcher.h"
 
 #include <atomic>
+#include <cstdint>
+#include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <unordered_set>
+#include <unordered_map>
 
 namespace control {
 
@@ -27,12 +30,21 @@ struct agent_runtime_options {
 
 class agent_runtime {
 public:
+  using now_ms_provider = std::function<int64_t()>;
+
   agent_runtime();
   explicit agent_runtime(std::unique_ptr<i_control_channel> channel);
   agent_runtime(
       std::unique_ptr<i_control_channel> channel,
       std::shared_ptr<agent_command_executor_registry> executor_registry,
       agent_runtime_heartbeat_builder heartbeat_builder);
+  agent_runtime(
+      std::unique_ptr<i_control_channel> channel,
+      std::shared_ptr<agent_command_executor_registry> executor_registry,
+      agent_runtime_heartbeat_builder heartbeat_builder,
+      now_ms_provider now_ms_fn,
+      std::size_t seen_command_cache_max_size,
+      int64_t seen_command_cache_ttl_ms);
   ~agent_runtime();
 
   bool start(const agent_runtime_options& options);
@@ -45,6 +57,9 @@ public:
   void register_command_executor(command_type type, command_executor executor);
 
 private:
+  static constexpr std::size_t kDefaultSeenCommandCacheMaxSize = 50'000;
+  static constexpr int64_t kDefaultSeenCommandCacheTtlMs = 86'400'000;
+
   bool send_command_ack(
       const nlohmann::json& request_id,
       const std::string& command_id,
@@ -80,7 +95,11 @@ private:
   agent_runtime_options options_{};
   std::atomic<bool> running_{false};
   std::mutex seen_commands_mutex_;
-  std::unordered_set<std::string> seen_command_ids_;
+  std::unordered_map<std::string, int64_t> seen_command_ids_;
+  std::deque<std::pair<std::string, int64_t>> seen_command_order_;
+  now_ms_provider now_ms_fn_{};
+  std::size_t seen_command_cache_max_size_ = kDefaultSeenCommandCacheMaxSize;
+  int64_t seen_command_cache_ttl_ms_ = kDefaultSeenCommandCacheTtlMs;
 
   runtime_event_dispatcher event_dispatcher_;
   agent_runtime_execution_worker execution_worker_;

@@ -178,7 +178,9 @@ void wss_control_channel::stop() {
 }
 
 bool wss_control_channel::send(const envelope& message) {
-  const auto payload = encode_envelope_json(message);
+  queued_message payload;
+  payload.payload = encode_envelope_json(message);
+  payload.drop_if_disconnected = (message.type == message_type::agent_heartbeat);
   std::shared_ptr<impl> state;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -195,13 +197,13 @@ bool wss_control_channel::send(const envelope& message) {
       if (outgoing_messages_.size() >= kMaxOutgoingQueue) {
         outgoing_messages_.pop_back();
       }
-      outgoing_messages_.push_front(payload);
+      outgoing_messages_.push_front(std::move(payload));
     } else {
       if (outgoing_messages_.size() >= kMaxOutgoingQueue) {
         log::warn("wss send dropped: outgoing queue full");
         return false;
       }
-      outgoing_messages_.push_back(payload);
+      outgoing_messages_.push_back(std::move(payload));
     }
     state = impl_;
   }
@@ -361,28 +363,55 @@ void wss_control_channel::on_connection_lost(const std::string& reason, bool emi
 }
 
 void wss_control_channel::maybe_start_write() {
-  std::deque<std::string> pending;
-  std::shared_ptr<impl> state;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!running_ || !connected_ || !impl_ || !impl_->client || !impl_->client->getConnection()) {
+  while (true) {
+    std::shared_ptr<impl> state;
+    queued_message pending;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!running_ || !connected_ || !impl_ || !impl_->client) {
+        return;
+      }
+      if (outgoing_messages_.empty()) {
+        return;
+      }
+      state = impl_;
+      pending = std::move(outgoing_messages_.front());
+      outgoing_messages_.pop_front();
+    }
+
+    auto conn = state->client->getConnection();
+    if (!conn || !conn->connected()) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (running_ && !pending.drop_if_disconnected) {
+          outgoing_messages_.push_front(std::move(pending));
+        }
+      }
+      on_connection_lost("connection unavailable while sending", false);
       return;
     }
-    if (outgoing_messages_.empty()) {
+
+    try {
+      conn->send(pending.payload, drogon::WebSocketMessageType::Text);
+    } catch (const std::exception& ex) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (running_ && !pending.drop_if_disconnected) {
+          outgoing_messages_.push_front(std::move(pending));
+        }
+      }
+      on_connection_lost(std::string("send failed: ") + ex.what(), true);
+      return;
+    } catch (...) {
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (running_ && !pending.drop_if_disconnected) {
+          outgoing_messages_.push_front(std::move(pending));
+        }
+      }
+      on_connection_lost("send failed: unknown exception", true);
       return;
     }
-    pending.swap(outgoing_messages_);
-    state = impl_;
-  }
-
-  auto conn = state->client->getConnection();
-  if (!conn || !conn->connected()) {
-    on_connection_lost("connection unavailable while sending", false);
-    return;
-  }
-
-  for (auto& row : pending) {
-    conn->send(std::move(row), drogon::WebSocketMessageType::Text);
   }
 }
 

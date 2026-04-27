@@ -216,8 +216,7 @@ void UiActionGateway::handle_params_update(
     throw std::invalid_argument("params is required and must be object");
   }
   const auto agent_mac = req.payload["agent_mac"].get<std::string>();
-  const auto merged = params_service_.merge_and_validate(agent_mac, req.payload["params"]);
-  params_service_.save(agent_mac, merged);
+  const auto params_patch = req.payload["params"];
 
   ctrl::application::SubmitCommandInput input;
   input.agent.mac = agent_mac;
@@ -229,7 +228,7 @@ void UiActionGateway::handle_params_update(
     input.agent.display_id = req.payload.value("agent_id", agent_mac);
   }
   input.kind = ctrl::domain::CommandKind::ParamsSet;
-  input.payload = merged;
+  input.payload = params_patch;
   input.timeout_ms = std::max(100, req.payload.value("timeout_ms", 5000));
   input.max_retry = std::max(1, req.payload.value("max_retry", 1));
   input.wait_result = false;
@@ -237,6 +236,7 @@ void UiActionGateway::handle_params_update(
   input.actor_id = actor_id;
 
   const auto out = command_orchestrator_.submit(input);
+  auto merged = params_service_.load_or_init(agent_mac);
   send_ui_result(
       session_id,
       req.name,

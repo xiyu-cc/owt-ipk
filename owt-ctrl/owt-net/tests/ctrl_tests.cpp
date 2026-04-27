@@ -14,6 +14,7 @@
 #include "ctrl/application/redaction_service.h"
 #include "ctrl/application/retry_service.h"
 #include "owt/protocol/v5/contract.h"
+#include "app/bootstrap/runtime/session_runtime.h"
 
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
@@ -400,6 +401,64 @@ private:
   std::unordered_map<std::string, ctrl::domain::AgentState> rows_;
 };
 
+class flaky_agent_repository final : public ctrl::ports::IAgentRepository {
+public:
+  bool upsert(const ctrl::domain::AgentState& row, std::string& error) override {
+    std::lock_guard<std::mutex> lk(mutex_);
+    rows_[row.agent.mac] = row;
+    if (fail_upsert_) {
+      error = "injected upsert failure";
+      return false;
+    }
+    error.clear();
+    return true;
+  }
+
+  bool get(std::string_view agent_mac, ctrl::domain::AgentState& out, std::string& error) const override {
+    std::lock_guard<std::mutex> lk(mutex_);
+    const auto it = rows_.find(std::string(agent_mac));
+    if (it == rows_.end()) {
+      error = "agent not found";
+      return false;
+    }
+    out = it->second;
+    error.clear();
+    return true;
+  }
+
+  bool list(std::vector<ctrl::domain::AgentState>& out, std::string& error) const override {
+    std::lock_guard<std::mutex> lk(mutex_);
+    out.clear();
+    for (const auto& [id, row] : rows_) {
+      (void)id;
+      out.push_back(row);
+    }
+    error.clear();
+    return true;
+  }
+
+  bool mark_all_offline(int64_t updated_at_ms, std::string& error) override {
+    std::lock_guard<std::mutex> lk(mutex_);
+    for (auto& [id, row] : rows_) {
+      (void)id;
+      row.online = false;
+      row.last_seen_at_ms = updated_at_ms;
+    }
+    error.clear();
+    return true;
+  }
+
+  void set_fail_upsert(bool fail_upsert) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    fail_upsert_ = fail_upsert;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  bool fail_upsert_ = false;
+  std::unordered_map<std::string, ctrl::domain::AgentState> rows_;
+};
+
 class in_memory_params_repository final : public ctrl::ports::IParamsRepository {
 public:
   bool load(std::string_view agent_mac, nlohmann::json& out, std::string& error) const override {
@@ -759,6 +818,66 @@ void test_agent_message_terminal_once() {
     }
   }
   require(has_duplicate_event, "duplicate terminal event should be recorded");
+}
+
+void test_agent_registry_persist_failure_observable() {
+  test_clock clock;
+  clock.set(2500);
+  flaky_agent_repository repo;
+  repo.set_fail_upsert(true);
+  ctrl::application::AgentRegistryService registry(repo, clock);
+
+  ctrl::domain::AgentState state;
+  state.agent = {"AA:00:00:00:25:01", "agent-25-01"};
+  state.online = true;
+  state.registered_at_ms = clock.now_ms();
+  state.last_seen_at_ms = clock.now_ms();
+  state.last_heartbeat_at_ms = clock.now_ms();
+
+  std::string persist_error;
+  require(!registry.on_register(state, &persist_error), "register should surface persist failure");
+  require(!persist_error.empty(), "register persist error should be present");
+  require(registry.persist_failure_count() == 1, "persist failure counter should increase");
+
+  ctrl::domain::AgentState loaded;
+  require(registry.get_agent(state.agent.mac, loaded), "agent should remain available in memory");
+  require(loaded.online, "in-memory state should remain online after register");
+
+  persist_error.clear();
+  require(
+      !registry.on_heartbeat(state.agent.mac, nlohmann::json{{"cpu", 12}}, clock.now_ms(), &persist_error),
+      "heartbeat should surface persist failure");
+  require(!persist_error.empty(), "heartbeat persist error should be present");
+  require(registry.persist_failure_count() == 2, "persist failure counter should increase again");
+
+  require(registry.bind_session(state.agent.mac, "sess-25"), "bind_session should still succeed");
+  persist_error.clear();
+  require(
+      !registry.on_disconnect(state.agent.mac, "sess-25", &persist_error),
+      "disconnect should surface persist failure");
+  require(!persist_error.empty(), "disconnect persist error should be present");
+  require(registry.persist_failure_count() == 3, "persist failure counter should increase on disconnect");
+  require(registry.get_agent(state.agent.mac, loaded), "agent should still be readable");
+  require(!loaded.online, "in-memory disconnect state should still apply");
+}
+
+void test_ui_session_registry_non_blocking_backpressure() {
+  app::bootstrap::runtime::UiSessionRegistry registry(
+      app::bootstrap::runtime::UiSessionRegistry::Config{
+          .queue_limit = 0,
+          .send_timeout_ms = 2000,
+      });
+  registry.add_session("sess-ui", drogon::WebSocketConnectionPtr{}, "tester");
+
+  const auto begin = std::chrono::steady_clock::now();
+  const bool accepted = registry.enqueue("sess-ui", "payload");
+  const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - begin)
+                              .count();
+  require(!accepted, "queue overflow should reject enqueue");
+  require(elapsed_ms < 100, "enqueue should be non-blocking under backpressure");
+
+  registry.close_all();
 }
 
 void test_retry_service() {
@@ -1439,6 +1558,8 @@ int main() {
     test_command_bus_envelope_v5_codec();
     test_command_orchestrator_submit();
     test_agent_message_terminal_once();
+    test_agent_registry_persist_failure_observable();
+    test_ui_session_registry_non_blocking_backpressure();
     test_retry_service();
     test_params_rate_limiter_redaction();
     test_presenter_command_redaction();

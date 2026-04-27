@@ -71,6 +71,7 @@ set(OWT_CTRL_TEST_TARGET owt_ctrl_tests)
 add_executable(${OWT_CTRL_TEST_TARGET}
   tests/ctrl_tests.cpp
   ${OWT_CTRL_COMMON_SOURCES}
+  src/app/bootstrap/runtime/session_runtime.cpp
   src/app/presenter/serializers.cpp
   src/app/ws/command_bus_protocol.cpp
   src/app/ws/scheduler/event_scheduler.cpp
@@ -78,12 +79,17 @@ add_executable(${OWT_CTRL_TEST_TARGET}
 target_include_directories(${OWT_CTRL_TEST_TARGET}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/drogon/lib/inc
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/drogon/trantor
+    ${CMAKE_BINARY_DIR}/third_party/drogon/lib/inc
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite3
     ${OWT_PROTOCOL_INCLUDE_DIR}
 )
 target_link_libraries(${OWT_CTRL_TEST_TARGET}
   PRIVATE
     SQLite3
+    Drogon::Drogon
     spdlog::spdlog_header_only
     nlohmann_json::nlohmann_json
     Threads::Threads

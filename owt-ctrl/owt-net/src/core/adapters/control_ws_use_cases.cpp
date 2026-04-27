@@ -1,4 +1,6 @@
 #include "ctrl/adapters/control_ws_use_cases.h"
+
+#include "app/runtime_log.h"
 #include "owt/protocol/v5/contract.h"
 
 #include <stdexcept>
@@ -42,7 +44,15 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
         std::lock_guard<std::mutex> lk(mutex_);
         session_agents_[in.session_token] = in.agent_mac;
       }
-      registry_.bind_session(in.agent_mac, in.session_token);
+      std::string bind_error;
+      if (!registry_.bind_session(in.agent_mac, in.session_token, &bind_error)) {
+        log::warn(
+            "bind agent session failed: agent_mac={}, session_token={}, error={}, persist_failure_count={}",
+            in.agent_mac,
+            in.session_token,
+            bind_error.empty() ? "unknown" : bind_error,
+            registry_.persist_failure_count());
+      }
       messages_.on_agent_registered(in.agent_mac, in.agent_id, in.payload);
       out.push_back(WsOutboundMessage{
           in.session_token,
@@ -116,7 +126,15 @@ void ControlWsUseCases::on_close(std::string_view session_token) {
     session_agents_.erase(it);
   }
   if (!agent_mac.empty()) {
-    registry_.on_disconnect(agent_mac, session_token);
+    std::string disconnect_error;
+    if (!registry_.on_disconnect(agent_mac, session_token, &disconnect_error)) {
+      log::warn(
+          "unbind agent session failed: agent_mac={}, session_token={}, error={}, persist_failure_count={}",
+          agent_mac,
+          session_token,
+          disconnect_error.empty() ? "unknown" : disconnect_error,
+          registry_.persist_failure_count());
+    }
   }
 }
 

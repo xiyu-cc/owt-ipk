@@ -17,6 +17,10 @@ namespace {
 constexpr const char* kDefaultSiteId = "default";
 constexpr const char* kAgentVersion = "0.2.0";
 
+int64_t default_now_ms() {
+  return unix_time_ms_now();
+}
+
 bool is_command_expired(const command& cmd, int64_t now_ms) {
   return cmd.expires_at_ms > 0 && now_ms >= cmd.expires_at_ms;
 }
@@ -52,11 +56,30 @@ agent_runtime::agent_runtime(
     std::unique_ptr<i_control_channel> channel,
     std::shared_ptr<agent_command_executor_registry> executor_registry,
     agent_runtime_heartbeat_builder heartbeat_builder)
+    : agent_runtime(
+          std::move(channel),
+          std::move(executor_registry),
+          std::move(heartbeat_builder),
+          default_now_ms,
+          kDefaultSeenCommandCacheMaxSize,
+          kDefaultSeenCommandCacheTtlMs) {}
+
+agent_runtime::agent_runtime(
+    std::unique_ptr<i_control_channel> channel,
+    std::shared_ptr<agent_command_executor_registry> executor_registry,
+    agent_runtime_heartbeat_builder heartbeat_builder,
+    now_ms_provider now_ms_fn,
+    std::size_t seen_command_cache_max_size,
+    int64_t seen_command_cache_ttl_ms)
     : control_channel_(channel ? std::move(channel) : make_default_control_channel()),
       executor_registry_(executor_registry ? std::move(executor_registry)
                                            : make_default_command_executor_registry()),
       heartbeat_builder_(std::move(heartbeat_builder)),
-      message_router_(current_protocol_version()) {}
+      message_router_(current_protocol_version()) {
+  now_ms_fn_ = now_ms_fn ? std::move(now_ms_fn) : now_ms_provider(default_now_ms);
+  seen_command_cache_max_size_ = std::max<std::size_t>(1, seen_command_cache_max_size);
+  seen_command_cache_ttl_ms_ = std::max<int64_t>(1, seen_command_cache_ttl_ms);
+}
 
 agent_runtime::~agent_runtime() {
   stop();
@@ -90,6 +113,7 @@ bool agent_runtime::start(const agent_runtime_options& options) {
   {
     std::lock_guard<std::mutex> seen_lk(seen_commands_mutex_);
     seen_command_ids_.clear();
+    seen_command_order_.clear();
   }
 
   const auto worker_started = execution_worker_.start(
@@ -302,11 +326,37 @@ bool agent_runtime::mark_command_seen(const std::string& command_id) {
     return true;
   }
   std::lock_guard<std::mutex> lk(seen_commands_mutex_);
+
+  const auto now_ms = now_ms_fn_ ? now_ms_fn_() : default_now_ms();
+  while (!seen_command_order_.empty()) {
+    const auto& oldest = seen_command_order_.front();
+    const bool expired = now_ms - oldest.second >= seen_command_cache_ttl_ms_;
+    auto it = seen_command_ids_.find(oldest.first);
+    const bool superseded = it == seen_command_ids_.end() || it->second != oldest.second;
+    if (!expired && !superseded) {
+      break;
+    }
+    if (!superseded && expired) {
+      seen_command_ids_.erase(it);
+    }
+    seen_command_order_.pop_front();
+  }
+
   const auto it = seen_command_ids_.find(command_id);
   if (it != seen_command_ids_.end()) {
     return false;
   }
-  seen_command_ids_.insert(command_id);
+
+  seen_command_ids_[command_id] = now_ms;
+  seen_command_order_.emplace_back(command_id, now_ms);
+  while (seen_command_ids_.size() > seen_command_cache_max_size_ && !seen_command_order_.empty()) {
+    const auto oldest = seen_command_order_.front();
+    seen_command_order_.pop_front();
+    auto oldest_it = seen_command_ids_.find(oldest.first);
+    if (oldest_it != seen_command_ids_.end() && oldest_it->second == oldest.second) {
+      seen_command_ids_.erase(oldest_it);
+    }
+  }
   return true;
 }
 
@@ -342,7 +392,7 @@ void agent_runtime::handle_channel_message(const envelope& message) {
               return;
             }
 
-            const auto checked_at_ms = unix_time_ms_now();
+            const auto checked_at_ms = now_ms_fn_ ? now_ms_fn_() : default_now_ms();
             if (is_command_expired(cmd, checked_at_ms)) {
               nlohmann::json result = {
                   {"ok", false},

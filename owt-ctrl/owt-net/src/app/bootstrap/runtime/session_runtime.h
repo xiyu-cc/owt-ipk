@@ -188,6 +188,11 @@ public:
       const ctrl::domain::CommandEvent& event) override;
 
 private:
+  std::string build_snapshot_message(std::string_view reason) const;
+  std::string build_agent_message(
+      std::string_view reason,
+      std::string_view agent_mac) const;
+
   ctrl::application::AgentRegistryService& registry_;
   const ctrl::ports::IClock& clock_;
   UiSubscriptionStore& subscriptions_;

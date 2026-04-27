@@ -1,5 +1,7 @@
 #include "ctrl/application/agent_message_service.h"
 
+#include "app/runtime_log.h"
+
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -55,7 +57,14 @@ void AgentMessageService::on_agent_registered(
     }
   }
 
-  registry_.on_register(state);
+  std::string persist_error;
+  if (!registry_.on_register(state, &persist_error)) {
+    log::warn(
+        "agent register persisted in memory but db upsert failed: agent_mac={}, error={}, persist_failure_count={}",
+        agent_mac,
+        persist_error.empty() ? "unknown" : persist_error,
+        registry_.persist_failure_count());
+  }
   publisher_.publish_agent("agent_register", agent_mac);
   publisher_.publish_snapshot("agent_register", agent_mac);
 }
@@ -67,7 +76,14 @@ void AgentMessageService::on_agent_heartbeat(
   if (agent_mac.empty()) {
     throw std::invalid_argument("agent_mac is required");
   }
-  registry_.on_heartbeat(agent_mac, heartbeat_stats, heartbeat_at_ms);
+  std::string persist_error;
+  if (!registry_.on_heartbeat(agent_mac, heartbeat_stats, heartbeat_at_ms, &persist_error)) {
+    log::warn(
+        "agent heartbeat persisted in memory but db upsert failed: agent_mac={}, error={}, persist_failure_count={}",
+        agent_mac,
+        persist_error.empty() ? "unknown" : persist_error,
+        registry_.persist_failure_count());
+  }
   publisher_.publish_agent("agent_heartbeat", agent_mac);
 }
 

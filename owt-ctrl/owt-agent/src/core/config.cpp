@@ -7,6 +7,24 @@
 
 namespace owt_agent {
 
+namespace {
+
+bool parse_int_strict(const std::string& text, int& out) {
+  try {
+    size_t idx = 0;
+    const int parsed = std::stoi(text, &idx);
+    if (idx != text.size()) {
+      return false;
+    }
+    out = parsed;
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+} // namespace
+
 Config load_config(const std::string& path) {
   Config cfg;
 
@@ -46,32 +64,24 @@ Config load_config(const std::string& path) {
       } else if (key == "wss_endpoint") {
         cfg.agent.wss_endpoint = value;
       } else if (key == "heartbeat_interval_ms") {
-        try {
-          const int parsed = std::stoi(value);
+        int parsed = 0;
+        if (parse_int_strict(value, parsed)) {
           cfg.agent.heartbeat_interval_ms = std::clamp(parsed, 1000, 120000);
-        } catch (const std::exception&) {
-          // keep default
         }
       } else if (key == "status_collect_interval_ms") {
-        try {
-          const int parsed = std::stoi(value);
+        int parsed = 0;
+        if (parse_int_strict(value, parsed)) {
           cfg.agent.status_collect_interval_ms = std::clamp(parsed, 200, 60000);
-        } catch (const std::exception&) {
-          // keep default
         }
       } else if (key == "ws_event_workers") {
-        try {
-          const int parsed = std::stoi(value);
+        int parsed = 0;
+        if (parse_int_strict(value, parsed)) {
           cfg.agent.ws_event_workers = std::clamp(parsed, 1, 256);
-        } catch (const std::exception&) {
-          // keep default
         }
       } else if (key == "ws_event_queue_capacity") {
-        try {
-          const int parsed = std::stoi(value);
+        int parsed = 0;
+        if (parse_int_strict(value, parsed)) {
           cfg.agent.ws_event_queue_capacity = std::clamp(parsed, 64, 1'000'000);
-        } catch (const std::exception&) {
-          // keep default
         }
       }
       continue;

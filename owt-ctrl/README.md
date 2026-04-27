@@ -200,6 +200,14 @@ owt-agent/application/owt-agent/files/config.ini
 
 关键配置项包括 `agent_id`、`agent_mac`、`wss_endpoint`、`heartbeat_interval_ms`、`status_collect_interval_ms`。
 
+## 独立认证中心部署约定（auth.wzhex.com）
+
+- `owt-net` 站点（`owt.wzhex.com`）仅保留内部鉴权子请求 `location = /oauth2/auth`（`internal`），用于向本机 `oauth2-proxy`（`127.0.0.1:4180`）校验会话。
+- 未登录访问 `owt.wzhex.com` 时，nginx 通过 `error_page 401` 跳转到 `https://auth.wzhex.com/oauth2/start?rd=$scheme://$host$request_uri`。
+- `owt.wzhex.com` 不再公开提供 `/oauth2/*` 路径（无兼容入口）；Google OIDC 登录入口与 `/oauth2/callback` 均由 `auth.wzhex.com` 站点承载。
+- 认证 cookie 需使用跨子域配置（例如 `cookie_domains = [".wzhex.com"]`），以支持 `auth.wzhex.com` 与 `owt.wzhex.com` 会话共享。
+- `owt-net` 的 `deb` 包不负责安装、配置或管理 `oauth2-proxy` 独立服务；运维侧需自行保证认证服务可用。
+
 ## owt-agent 进程内无文件写入约束
 
 - 约束范围仅限 `owt-agent` 进程自身：不允许业务日志或运行态数据写入本地文件。
