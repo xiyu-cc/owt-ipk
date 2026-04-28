@@ -3,9 +3,54 @@
 #include <algorithm>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ctrl::infrastructure {
+
+namespace {
+
+std::string invalid_transition_error(
+    domain::CommandState current_state,
+    domain::CommandState next_state) {
+  return "invalid state transition: " + domain::to_string(current_state) + " -> " +
+      domain::to_string(next_state);
+}
+
+bool try_parse_state_text_or_error(
+    std::string_view text,
+    domain::CommandState& out,
+    std::string& error) {
+  if (!domain::try_parse_command_state(text, out)) {
+    error = "invalid command state in storage";
+    return false;
+  }
+  return true;
+}
+
+bool is_allowed_non_terminal_transition(
+    domain::CommandState current_state,
+    domain::CommandState next_state) {
+  if (next_state == domain::CommandState::Dispatched) {
+    return current_state == domain::CommandState::RetryPending;
+  }
+  if (next_state == domain::CommandState::Acked) {
+    return current_state == domain::CommandState::Dispatched;
+  }
+  if (next_state == domain::CommandState::Running) {
+    return current_state == domain::CommandState::Acked;
+  }
+  return false;
+}
+
+bool is_allowed_terminal_transition(domain::CommandState current_state) {
+  return current_state == domain::CommandState::Dispatched ||
+      current_state == domain::CommandState::Acked ||
+      current_state == domain::CommandState::Running ||
+      current_state == domain::CommandState::RetryPending;
+}
+
+} // namespace
 
 bool SqliteStore::upsert(const domain::CommandSnapshot& row, std::string& error) {
   using namespace sqlite_detail;
@@ -309,6 +354,15 @@ bool SqliteStore::update_state_if_not_terminal(
     return true;
   }
 
+  domain::CommandState current_state_enum = domain::CommandState::Created;
+  if (!try_parse_state_text_or_error(current_state, current_state_enum, error)) {
+    return false;
+  }
+  if (!is_allowed_non_terminal_transition(current_state_enum, next_state)) {
+    error = invalid_transition_error(current_state_enum, next_state);
+    return false;
+  }
+
   statement write_stmt;
   if (!prepare(
           db_,
@@ -369,6 +423,15 @@ bool SqliteStore::update_terminal_state_once(
     applied = false;
     error.clear();
     return true;
+  }
+
+  domain::CommandState current_state_enum = domain::CommandState::Created;
+  if (!try_parse_state_text_or_error(current_state, current_state_enum, error)) {
+    return false;
+  }
+  if (!is_allowed_terminal_transition(current_state_enum)) {
+    error = invalid_transition_error(current_state_enum, terminal_state);
+    return false;
   }
 
   statement write_stmt;
@@ -474,6 +537,16 @@ bool SqliteStore::update_retry_state(
 
   if (is_terminal_state_text(column_text(read_stmt.ptr, 0))) {
     error = "command not found or already terminal";
+    return false;
+  }
+  const auto current_state_text = column_text(read_stmt.ptr, 0);
+  domain::CommandState current_state = domain::CommandState::Created;
+  if (!try_parse_state_text_or_error(current_state_text, current_state, error)) {
+    return false;
+  }
+  if (next_state != domain::CommandState::RetryPending ||
+      current_state != domain::CommandState::RetryPending) {
+    error = invalid_transition_error(current_state, next_state);
     return false;
   }
 

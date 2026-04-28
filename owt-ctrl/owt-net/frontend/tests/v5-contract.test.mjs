@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import {
   COMMAND_BUS_ACTIONS,
   COMMAND_BUS_EVENTS,
+  COMMAND_BUS_ERROR_CODES,
   WS_UI_PATH
 } from '../src/protocol/v5.js'
 
@@ -20,6 +21,53 @@ assert.deepEqual(Object.values(COMMAND_BUS_EVENTS), [
   'agent.update',
   'command.event'
 ])
+
+const contractHeader = readFileSync(
+  new URL('../../../owt-protocol/include/owt/protocol/v5/contract.h', import.meta.url),
+  'utf8'
+)
+
+function extractNamespaceBody(text, namespaceName) {
+  const startToken = `namespace ${namespaceName} {`
+  const endToken = `} // namespace ${namespaceName}`
+  const start = text.indexOf(startToken)
+  assert.notEqual(start, -1, `missing namespace ${namespaceName} in contract.h`)
+  const end = text.indexOf(endToken, start)
+  assert.notEqual(end, -1, `missing namespace end marker for ${namespaceName} in contract.h`)
+  return text.slice(start, end)
+}
+
+function extractStringConstants(body, keyPrefix) {
+  const regex = new RegExp(`inline constexpr std::string_view ${keyPrefix}\\w+ = \"([^\"]+)\";`, 'g')
+  const values = []
+  for (const match of body.matchAll(regex)) {
+    values.push(match[1])
+  }
+  return values
+}
+
+const uiNamespaceBody = extractNamespaceBody(contractHeader, 'ui')
+const errorCodeNamespaceBody = extractNamespaceBody(contractHeader, 'error_code')
+const backendUiActions = extractStringConstants(uiNamespaceBody, 'kAction')
+const backendUiEvents = extractStringConstants(uiNamespaceBody, 'kEvent')
+const backendErrorCodes = extractStringConstants(errorCodeNamespaceBody, 'k')
+const sortStrings = (values) => [...values].sort()
+
+assert.deepEqual(
+  sortStrings(Object.values(COMMAND_BUS_ACTIONS)),
+  sortStrings(backendUiActions),
+  'frontend/backend UI action constants must match'
+)
+assert.deepEqual(
+  sortStrings(Object.values(COMMAND_BUS_EVENTS)),
+  sortStrings(backendUiEvents),
+  'frontend/backend UI event constants must match'
+)
+assert.deepEqual(
+  sortStrings(Object.values(COMMAND_BUS_ERROR_CODES)),
+  sortStrings(backendErrorCodes),
+  'frontend/backend error code constants must match'
+)
 
 const appVue = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8')
 assert.match(appVue, /useCommandBusSocket\(WS_UI_PATH\)/)

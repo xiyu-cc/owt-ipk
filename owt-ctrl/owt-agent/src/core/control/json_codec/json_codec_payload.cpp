@@ -9,7 +9,6 @@ namespace {
 json command_to_json(const command& c) {
   return {
       {"command_id", c.command_id},
-      {"idempotency_key", c.idempotency_key},
       {"command_type", to_string(c.type)},
       {"issued_at_ms", c.issued_at_ms},
       {"expires_at_ms", c.expires_at_ms},
@@ -23,14 +22,13 @@ bool command_from_json(const json& j, command& out, std::string& error) {
   std::string unknown;
   if (!reject_unknown_fields(
           j,
-          {"command_id", "idempotency_key", "command_type", "issued_at_ms", "expires_at_ms", "timeout_ms", "max_retry", "payload"},
+          {"command_id", "command_type", "issued_at_ms", "expires_at_ms", "timeout_ms", "max_retry", "payload"},
           unknown)) {
     error = "unknown field in command: " + unknown;
     return false;
   }
 
   if (!j.contains("command_id") || !j["command_id"].is_string() ||
-      !j.contains("idempotency_key") || !j["idempotency_key"].is_string() ||
       !j.contains("command_type") || !j["command_type"].is_string() ||
       !j.contains("issued_at_ms") || !j["issued_at_ms"].is_number_integer() ||
       !j.contains("expires_at_ms") || !j["expires_at_ms"].is_number_integer() ||
@@ -42,7 +40,6 @@ bool command_from_json(const json& j, command& out, std::string& error) {
   }
 
   out.command_id = j["command_id"].get<std::string>();
-  out.idempotency_key = j["idempotency_key"].get<std::string>();
   out.issued_at_ms = j["issued_at_ms"].get<int64_t>();
   out.expires_at_ms = j["expires_at_ms"].get<int64_t>();
   out.timeout_ms = j["timeout_ms"].get<int>();
@@ -54,8 +51,8 @@ bool command_from_json(const json& j, command& out, std::string& error) {
     error = "invalid command_type";
     return false;
   }
-  if (out.command_id.empty() || out.idempotency_key.empty()) {
-    error = "command_id and idempotency_key are required";
+  if (out.command_id.empty()) {
+    error = "command_id is required";
     return false;
   }
 
@@ -89,7 +86,6 @@ json payload_to_json(message_type type, const payload_variant& payload) {
       if (const auto* p = std::get_if<heartbeat_payload>(&payload)) {
         return {
             {"agent_mac", p->agent_mac},
-            {"agent_id", p->agent_id},
             {"heartbeat_at_ms", p->heartbeat_at_ms},
             {"stats", p->stats},
         };
@@ -106,7 +102,6 @@ json payload_to_json(message_type type, const payload_variant& payload) {
       if (const auto* p = std::get_if<command_ack_payload>(&payload)) {
         return {
             {"agent_mac", p->agent_mac},
-            {"agent_id", p->agent_id},
             {"command_id", p->command_id},
             {"status", to_string(p->status)},
             {"message", p->message},
@@ -118,7 +113,6 @@ json payload_to_json(message_type type, const payload_variant& payload) {
       if (const auto* p = std::get_if<command_result_payload>(&payload)) {
         return {
             {"agent_mac", p->agent_mac},
-            {"agent_id", p->agent_id},
             {"command_id", p->command_id},
             {"final_status", to_string(p->final_status)},
             {"exit_code", p->exit_code},
@@ -149,7 +143,7 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
     case message_type::agent_register: {
       if (!reject_unknown_fields(
               payload,
-              {"agent_mac", "agent_id", "site_id", "agent_version", "capabilities", "stats"},
+              {"agent_mac", "agent_id", "site_id", "agent_version", "capabilities"},
               unknown)) {
         ok = false;
         error = "unknown field in register payload: " + unknown;
@@ -204,7 +198,7 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return p;
     }
     case message_type::agent_heartbeat: {
-      if (!reject_unknown_fields(payload, {"agent_mac", "agent_id", "heartbeat_at_ms", "stats"}, unknown)) {
+      if (!reject_unknown_fields(payload, {"agent_mac", "heartbeat_at_ms", "stats"}, unknown)) {
         ok = false;
         error = "unknown field in heartbeat payload: " + unknown;
         return std::monostate{};
@@ -221,13 +215,7 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
         error = "heartbeat.heartbeat_at_ms is required";
         return std::monostate{};
       }
-      if (payload.contains("agent_id") && !payload["agent_id"].is_string()) {
-        ok = false;
-        error = "heartbeat.agent_id must be string";
-        return std::monostate{};
-      }
       p.agent_mac = payload["agent_mac"].get<std::string>();
-      p.agent_id = payload.value("agent_id", std::string{});
       p.heartbeat_at_ms = payload["heartbeat_at_ms"].get<int64_t>();
       if (payload.contains("stats")) {
         if (!payload["stats"].is_object()) {
@@ -258,7 +246,7 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return c;
     }
     case message_type::agent_command_ack: {
-      if (!reject_unknown_fields(payload, {"agent_mac", "agent_id", "command_id", "status", "message"}, unknown)) {
+      if (!reject_unknown_fields(payload, {"agent_mac", "command_id", "status", "message"}, unknown)) {
         ok = false;
         error = "unknown field in command_ack payload: " + unknown;
         return std::monostate{};
@@ -271,11 +259,6 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
         error = "command_ack.agent_mac/command_id/status are required";
         return std::monostate{};
       }
-      if (payload.contains("agent_id") && !payload["agent_id"].is_string()) {
-        ok = false;
-        error = "command_ack.agent_id must be string";
-        return std::monostate{};
-      }
       if (payload.contains("message") && !payload["message"].is_string()) {
         ok = false;
         error = "command_ack.message must be string";
@@ -283,7 +266,6 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       }
       command_ack_payload p;
       p.agent_mac = payload["agent_mac"].get<std::string>();
-      p.agent_id = payload.value("agent_id", std::string{});
       p.command_id = payload["command_id"].get<std::string>();
       p.message = payload.value("message", std::string{});
       if (!try_parse_command_status(payload["status"].get<std::string>(), p.status)) {
@@ -296,7 +278,7 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
     case message_type::agent_command_result: {
       if (!reject_unknown_fields(
               payload,
-              {"agent_mac", "agent_id", "command_id", "final_status", "exit_code", "result"},
+              {"agent_mac", "command_id", "final_status", "exit_code", "result"},
               unknown)) {
         ok = false;
         error = "unknown field in command_result payload: " + unknown;
@@ -306,22 +288,17 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
           payload["agent_mac"].get<std::string>().empty() ||
           !payload.contains("command_id") || !payload["command_id"].is_string() ||
           !payload.contains("final_status") || !payload["final_status"].is_string() ||
-          !payload.contains("exit_code") || !payload["exit_code"].is_number_integer()) {
+          !payload.contains("exit_code") || !payload["exit_code"].is_number_integer() ||
+          !payload.contains("result") || !payload["result"].is_object()) {
         ok = false;
-        error = "command_result.agent_mac/command_id/final_status/exit_code are required";
-        return std::monostate{};
-      }
-      if (payload.contains("agent_id") && !payload["agent_id"].is_string()) {
-        ok = false;
-        error = "command_result.agent_id must be string";
+        error = "command_result.agent_mac/command_id/final_status/exit_code/result are required";
         return std::monostate{};
       }
       command_result_payload p;
       p.agent_mac = payload["agent_mac"].get<std::string>();
-      p.agent_id = payload.value("agent_id", std::string{});
       p.command_id = payload["command_id"].get<std::string>();
       p.exit_code = payload["exit_code"].get<int>();
-      p.result = payload.value("result", json::object());
+      p.result = payload["result"];
       if (!try_parse_command_status(payload["final_status"].get<std::string>(), p.final_status)) {
         ok = false;
         error = "invalid command_result.final_status";

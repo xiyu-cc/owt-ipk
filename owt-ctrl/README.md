@@ -89,12 +89,17 @@
   - UI event：`agent.snapshot`、`agent.update`、`command.event`。
   - 连接建立后服务端主动推送全量 `agent.snapshot`；`session.subscribe` 仅用于 `scope=agent` 的观察切换。
   - 信封字段：`v/kind/name/id/ts_ms/payload/target`，其中 `v = "v5"`，`kind` 为 `action/result/event/error`。
+  - `kind=action` 报文禁止携带 `target`（仅 server->agent / server->ui event 可带 `target`）。
   - Agent action：`agent.register`、`agent.heartbeat`、`command.ack`、`command.result`。
   - Server->Agent event/error：`agent.registered`、`command.dispatch`、`server.error`。
   - 严格字段要求（v5，Agent->Server）：
-    - `agent.heartbeat.payload.agent_mac` 必填（建议同时附带 `agent_id`）。
-    - `command.ack.payload.agent_mac` 必填（建议同时附带 `agent_id`）。
-    - `command.result.payload.agent_mac` 必填（建议同时附带 `agent_id`）。
+    - `agent.register` 成功前，禁止发送 `agent.heartbeat` / `command.ack` / `command.result`。
+    - `agent.register.payload` 仅接受：`agent_mac`、`agent_id`、`site_id`、`agent_version`、`capabilities`。
+    - `agent.heartbeat.payload` 仅接受：`agent_mac`、`heartbeat_at_ms`、`stats`。
+    - `command.ack.payload` 仅接受：`agent_mac`、`command_id`、`status`、`message`。
+    - `command.result.payload` 仅接受：`agent_mac`、`command_id`、`final_status`、`exit_code`、`result`。
+    - `command.result.payload.result` 必填且必须为 object。
+    - `command.dispatch.payload.command` 不再包含 `idempotency_key`，统一以 `command_id` 作为幂等键。
     - 服务端对上述三类 action 不再使用 `session -> agent_mac` 回退推断。
 
 ### 6. 边界与异常处理
@@ -276,7 +281,8 @@ owt-agent/application/owt-agent/files/config.ini
 
 为避免升级窗口内出现批量离线，默认顺序如下：
 
-1. 先升级 `owt-agent`（确保三类 action payload 显式携带 `agent_mac`）。
+1. 先升级 `owt-agent`（确保三类 action payload 显式携带 `agent_mac`，且不再携带 `agent_id` / `target`）。
+   - 并确保 `protocol_version=v5`（非 `v5` 将启动失败）。
 2. 再升级 `owt-net`（启用严格校验并移除会话回退）。
 
 该顺序下，新 Agent + 旧 Server 可工作；旧 Agent + 新 Server 会被严格拒绝（预期行为）。

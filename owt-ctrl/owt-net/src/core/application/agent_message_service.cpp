@@ -8,6 +8,14 @@
 
 namespace ctrl::application {
 
+namespace {
+
+bool is_invalid_transition_error(std::string_view error) {
+  return error.rfind("invalid state transition:", 0) == 0;
+}
+
+} // namespace
+
 AgentMessageService::AgentMessageService(
     ports::ICommandRepository& commands,
     AgentRegistryService& registry,
@@ -42,8 +50,6 @@ void AgentMessageService::on_agent_registered(
     }
     if (meta.contains("agent_version") && meta["agent_version"].is_string()) {
       state.version = meta["agent_version"].get<std::string>();
-    } else if (meta.contains("version") && meta["version"].is_string()) {
-      state.version = meta["version"].get<std::string>();
     }
     if (meta.contains("capabilities") && meta["capabilities"].is_array()) {
       for (const auto& item : meta["capabilities"]) {
@@ -51,9 +57,6 @@ void AgentMessageService::on_agent_registered(
           state.capabilities.push_back(item.get<std::string>());
         }
       }
-    }
-    if (meta.contains("stats") && meta["stats"].is_object()) {
-      state.stats = meta["stats"];
     }
   }
 
@@ -93,11 +96,35 @@ void AgentMessageService::on_command_ack(
     domain::CommandState ack_state,
     std::string_view trace_id,
     std::string_view message) {
+  if (agent_mac.empty()) {
+    throw std::invalid_argument("agent_mac is required");
+  }
   if (command_id.empty()) {
     throw std::invalid_argument("command_id is required");
   }
   if (ack_state != domain::CommandState::Acked && ack_state != domain::CommandState::Running) {
     throw std::invalid_argument("ack_state must be Acked or Running");
+  }
+
+  domain::CommandSnapshot snapshot;
+  std::string load_error;
+  if (!commands_.get(command_id, snapshot, load_error)) {
+    throw std::runtime_error("load command failed: " + load_error);
+  }
+
+  if (snapshot.agent.mac != agent_mac) {
+    const auto event = append_event(
+        command_id,
+        "command_ack_rejected_agent_mismatch",
+        snapshot.state,
+        nlohmann::json{
+            {"expected_agent_mac", snapshot.agent.mac},
+            {"reported_agent_mac", std::string(agent_mac)},
+            {"trace_id", std::string(trace_id)},
+            {"message", std::string(message)},
+        });
+    publisher_.publish_command_event(snapshot, event);
+    throw std::invalid_argument("agent_mac does not match command owner");
   }
 
   bool applied = false;
@@ -109,6 +136,21 @@ void AgentMessageService::on_command_ack(
           clock_.now_ms(),
           applied,
           error)) {
+    if (is_invalid_transition_error(error)) {
+      const auto event = append_event(
+          command_id,
+          "command_ack_rejected_invalid_transition",
+          snapshot.state,
+          nlohmann::json{
+              {"current_state", domain::to_string(snapshot.state)},
+              {"next_state", domain::to_string(ack_state)},
+              {"trace_id", std::string(trace_id)},
+              {"message", std::string(message)},
+              {"error", error},
+          });
+      publisher_.publish_command_event(snapshot, event);
+      throw std::invalid_argument(error);
+    }
     throw std::runtime_error("update ack state failed: " + error);
   }
 
@@ -121,10 +163,9 @@ void AgentMessageService::on_command_ack(
           {"trace_id", std::string(trace_id)},
           {"message", std::string(message)},
       });
-  domain::CommandSnapshot snapshot;
-  std::string load_error;
-  if (commands_.get(command_id, snapshot, load_error)) {
-    publisher_.publish_command_event(snapshot, event);
+  domain::CommandSnapshot latest_snapshot;
+  if (commands_.get(command_id, latest_snapshot, load_error)) {
+    publisher_.publish_command_event(latest_snapshot, event);
   }
 }
 
@@ -135,11 +176,36 @@ void AgentMessageService::on_command_result(
     int exit_code,
     const nlohmann::json& result,
     std::string_view trace_id) {
+  if (agent_mac.empty()) {
+    throw std::invalid_argument("agent_mac is required");
+  }
   if (command_id.empty()) {
     throw std::invalid_argument("command_id is required");
   }
   if (!domain::is_terminal(final_state)) {
     throw std::invalid_argument("final_state must be terminal");
+  }
+
+  domain::CommandSnapshot snapshot;
+  std::string load_error;
+  if (!commands_.get(command_id, snapshot, load_error)) {
+    throw std::runtime_error("load command failed: " + load_error);
+  }
+
+  if (snapshot.agent.mac != agent_mac) {
+    const auto event = append_event(
+        command_id,
+        "command_result_rejected_agent_mismatch",
+        snapshot.state,
+        nlohmann::json{
+            {"expected_agent_mac", snapshot.agent.mac},
+            {"reported_agent_mac", std::string(agent_mac)},
+            {"trace_id", std::string(trace_id)},
+            {"exit_code", exit_code},
+            {"result", result},
+        });
+    publisher_.publish_command_event(snapshot, event);
+    throw std::invalid_argument("agent_mac does not match command owner");
   }
 
   bool applied = false;
@@ -151,6 +217,22 @@ void AgentMessageService::on_command_result(
           clock_.now_ms(),
           applied,
           error)) {
+    if (is_invalid_transition_error(error)) {
+      const auto event = append_event(
+          command_id,
+          "command_result_rejected_invalid_transition",
+          snapshot.state,
+          nlohmann::json{
+              {"current_state", domain::to_string(snapshot.state)},
+              {"next_state", domain::to_string(final_state)},
+              {"trace_id", std::string(trace_id)},
+              {"exit_code", exit_code},
+              {"result", result},
+              {"error", error},
+          });
+      publisher_.publish_command_event(snapshot, event);
+      throw std::invalid_argument(error);
+    }
     throw std::runtime_error("update terminal state failed: " + error);
   }
 
@@ -164,8 +246,6 @@ void AgentMessageService::on_command_result(
           {"exit_code", exit_code},
           {"result", result},
       });
-  domain::CommandSnapshot snapshot;
-  std::string load_error;
   if (commands_.get(command_id, snapshot, load_error)) {
     publisher_.publish_command_event(snapshot, event);
   }

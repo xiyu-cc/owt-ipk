@@ -62,7 +62,6 @@ struct register_payload {
 
 struct heartbeat_payload {
   std::string agent_mac;
-  std::string agent_id;
   int64_t heartbeat_at_ms = 0;
   nlohmann::json stats = nlohmann::json::object();
 };
@@ -74,7 +73,6 @@ struct register_ack_payload {
 
 struct command {
   std::string command_id;
-  std::string idempotency_key;
   command_type type = command_type::wol_wake;
   int64_t issued_at_ms = 0;
   int64_t expires_at_ms = 0;
@@ -85,7 +83,6 @@ struct command {
 
 struct command_ack_payload {
   std::string agent_mac;
-  std::string agent_id;
   std::string command_id;
   command_status status = command_status::acked;
   std::string message;
@@ -93,7 +90,6 @@ struct command_ack_payload {
 
 struct command_result_payload {
   std::string agent_mac;
-  std::string agent_id;
   std::string command_id;
   command_status final_status = command_status::failed;
   int exit_code = 0;

@@ -1,5 +1,7 @@
 #include "ctrl/domain/types.h"
 
+#include "owt/protocol/v5/contract.h"
+
 #include <string>
 
 namespace ctrl::domain {
@@ -7,15 +9,15 @@ namespace ctrl::domain {
 std::string to_string(CommandKind value) {
   switch (value) {
     case CommandKind::WakeOnLan:
-      return "wol_wake";
+      return std::string(owt::protocol::v5::command::type::kWolWake);
     case CommandKind::HostReboot:
-      return "host_reboot";
+      return std::string(owt::protocol::v5::command::type::kHostReboot);
     case CommandKind::HostPoweroff:
-      return "host_poweroff";
+      return std::string(owt::protocol::v5::command::type::kHostPoweroff);
     case CommandKind::MonitoringSet:
-      return "monitoring_set";
+      return std::string(owt::protocol::v5::command::type::kMonitoringSet);
     case CommandKind::ParamsSet:
-      return "params_set";
+      return std::string(owt::protocol::v5::command::type::kParamsSet);
   }
   return "unknown";
 }
@@ -23,45 +25,45 @@ std::string to_string(CommandKind value) {
 std::string to_string(CommandState value) {
   switch (value) {
     case CommandState::Created:
-      return "created";
+      return std::string(owt::protocol::v5::command::state::kCreated);
     case CommandState::Dispatched:
-      return "dispatched";
+      return std::string(owt::protocol::v5::command::state::kDispatched);
     case CommandState::Acked:
-      return "acked";
+      return std::string(owt::protocol::v5::command::state::kAcked);
     case CommandState::Running:
-      return "running";
+      return std::string(owt::protocol::v5::command::state::kRunning);
     case CommandState::RetryPending:
-      return "retry_pending";
+      return std::string(owt::protocol::v5::command::state::kRetryPending);
     case CommandState::Succeeded:
-      return "succeeded";
+      return std::string(owt::protocol::v5::command::state::kSucceeded);
     case CommandState::Failed:
-      return "failed";
+      return std::string(owt::protocol::v5::command::state::kFailed);
     case CommandState::TimedOut:
-      return "timed_out";
+      return std::string(owt::protocol::v5::command::state::kTimedOut);
     case CommandState::Cancelled:
-      return "cancelled";
+      return std::string(owt::protocol::v5::command::state::kCancelled);
   }
   return "unknown";
 }
 
 bool try_parse_command_kind(std::string_view text, CommandKind& out) {
-  if (text == "wol_wake" || text == "WOL_WAKE") {
+  if (text == owt::protocol::v5::command::type::kWolWake || text == "WOL_WAKE") {
     out = CommandKind::WakeOnLan;
     return true;
   }
-  if (text == "host_reboot" || text == "HOST_REBOOT") {
+  if (text == owt::protocol::v5::command::type::kHostReboot || text == "HOST_REBOOT") {
     out = CommandKind::HostReboot;
     return true;
   }
-  if (text == "host_poweroff" || text == "HOST_POWEROFF") {
+  if (text == owt::protocol::v5::command::type::kHostPoweroff || text == "HOST_POWEROFF") {
     out = CommandKind::HostPoweroff;
     return true;
   }
-  if (text == "monitoring_set" || text == "MONITORING_SET") {
+  if (text == owt::protocol::v5::command::type::kMonitoringSet || text == "MONITORING_SET") {
     out = CommandKind::MonitoringSet;
     return true;
   }
-  if (text == "params_set" || text == "PARAMS_SET") {
+  if (text == owt::protocol::v5::command::type::kParamsSet || text == "PARAMS_SET") {
     out = CommandKind::ParamsSet;
     return true;
   }
@@ -69,39 +71,39 @@ bool try_parse_command_kind(std::string_view text, CommandKind& out) {
 }
 
 bool try_parse_command_state(std::string_view text, CommandState& out) {
-  if (text == "created" || text == "CREATED") {
+  if (text == owt::protocol::v5::command::state::kCreated || text == "CREATED") {
     out = CommandState::Created;
     return true;
   }
-  if (text == "dispatched" || text == "DISPATCHED") {
+  if (text == owt::protocol::v5::command::state::kDispatched || text == "DISPATCHED") {
     out = CommandState::Dispatched;
     return true;
   }
-  if (text == "acked" || text == "ACKED") {
+  if (text == owt::protocol::v5::command::state::kAcked || text == "ACKED") {
     out = CommandState::Acked;
     return true;
   }
-  if (text == "running" || text == "RUNNING") {
+  if (text == owt::protocol::v5::command::state::kRunning || text == "RUNNING") {
     out = CommandState::Running;
     return true;
   }
-  if (text == "retry_pending" || text == "RETRY_PENDING") {
+  if (text == owt::protocol::v5::command::state::kRetryPending || text == "RETRY_PENDING") {
     out = CommandState::RetryPending;
     return true;
   }
-  if (text == "succeeded" || text == "SUCCEEDED") {
+  if (text == owt::protocol::v5::command::state::kSucceeded || text == "SUCCEEDED") {
     out = CommandState::Succeeded;
     return true;
   }
-  if (text == "failed" || text == "FAILED") {
+  if (text == owt::protocol::v5::command::state::kFailed || text == "FAILED") {
     out = CommandState::Failed;
     return true;
   }
-  if (text == "timed_out" || text == "TIMED_OUT") {
+  if (text == owt::protocol::v5::command::state::kTimedOut || text == "TIMED_OUT") {
     out = CommandState::TimedOut;
     return true;
   }
-  if (text == "cancelled" || text == "CANCELLED") {
+  if (text == owt::protocol::v5::command::state::kCancelled || text == "CANCELLED") {
     out = CommandState::Cancelled;
     return true;
   }

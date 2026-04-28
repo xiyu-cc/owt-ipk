@@ -42,7 +42,7 @@ void agent_runtime_message_router::route(const envelope& message, const handlers
   }
 
   if (handlers.on_command_dispatch) {
-    handlers.on_command_dispatch(message.id, *cmd);
+    handlers.on_command_dispatch(message, *cmd);
   }
 }
 

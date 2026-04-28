@@ -2,6 +2,7 @@
 #include "app/presenter/serializers.h"
 #include "app/ws/scheduler/event_scheduler.h"
 #include "app/bootstrap/runtime/agent_action_gateway.h"
+#include "app/bootstrap/runtime/ws_envelope_validator.h"
 #include "ctrl/adapters/control_ws_use_cases.h"
 #include "ctrl/infrastructure/sqlite_store.h"
 #include "ctrl/domain/types.h"
@@ -43,6 +44,35 @@ void require(bool condition, const std::string& message) {
   if (!condition) {
     throw std::runtime_error(message);
   }
+}
+
+std::string invalid_transition_error(
+    ctrl::domain::CommandState current_state,
+    ctrl::domain::CommandState next_state) {
+  return "invalid state transition: " + ctrl::domain::to_string(current_state) + " -> " +
+      ctrl::domain::to_string(next_state);
+}
+
+bool is_allowed_non_terminal_transition(
+    ctrl::domain::CommandState current_state,
+    ctrl::domain::CommandState next_state) {
+  if (next_state == ctrl::domain::CommandState::Dispatched) {
+    return current_state == ctrl::domain::CommandState::RetryPending;
+  }
+  if (next_state == ctrl::domain::CommandState::Acked) {
+    return current_state == ctrl::domain::CommandState::Dispatched;
+  }
+  if (next_state == ctrl::domain::CommandState::Running) {
+    return current_state == ctrl::domain::CommandState::Acked;
+  }
+  return false;
+}
+
+bool is_allowed_terminal_transition(ctrl::domain::CommandState current_state) {
+  return current_state == ctrl::domain::CommandState::Dispatched ||
+      current_state == ctrl::domain::CommandState::Acked ||
+      current_state == ctrl::domain::CommandState::Running ||
+      current_state == ctrl::domain::CommandState::RetryPending;
 }
 
 void sqlite_exec(sqlite3* db, const std::string& sql, const std::string& context) {
@@ -217,6 +247,10 @@ public:
       error.clear();
       return true;
     }
+    if (!is_allowed_non_terminal_transition(it->second.state, next_state)) {
+      error = invalid_transition_error(it->second.state, next_state);
+      return false;
+    }
     it->second.state = next_state;
     it->second.result = result;
     it->second.next_retry_at_ms = 0;
@@ -248,6 +282,10 @@ public:
       applied = false;
       error.clear();
       return true;
+    }
+    if (!is_allowed_terminal_transition(it->second.state)) {
+      error = invalid_transition_error(it->second.state, terminal_state);
+      return false;
     }
     it->second.state = terminal_state;
     it->second.result = result;
@@ -308,6 +346,11 @@ public:
     const auto it = rows_.find(std::string(command_id));
     if (it == rows_.end() || ctrl::domain::is_terminal(it->second.state)) {
       error = "command not found or already terminal";
+      return false;
+    }
+    if (next_state != ctrl::domain::CommandState::RetryPending ||
+        it->second.state != ctrl::domain::CommandState::RetryPending) {
+      error = invalid_transition_error(it->second.state, next_state);
       return false;
     }
     it->second.state = next_state;
@@ -741,6 +784,11 @@ public:
     return sent_messages_;
   }
 
+  void clear_sent_messages() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    sent_messages_.clear();
+  }
+
 private:
   mutable std::mutex mutex_;
   bool connected_ = true;
@@ -901,6 +949,100 @@ void test_agent_message_terminal_once() {
     }
   }
   require(has_duplicate_event, "duplicate terminal event should be recorded");
+}
+
+void test_agent_message_rejects_invalid_transition() {
+  test_clock clock;
+  clock.set(2400);
+  in_memory_command_repository command_repo;
+  in_memory_agent_repository agent_repo;
+  fake_status_publisher publisher;
+  fake_metrics metrics;
+
+  ctrl::application::AgentRegistryService registry(agent_repo, clock);
+  ctrl::application::AgentMessageService service(command_repo, registry, publisher, metrics, clock);
+
+  std::string error;
+  ctrl::domain::CommandSnapshot ack_seed;
+  ack_seed.spec.command_id = "cmd-invalid-ack";
+  ack_seed.spec.trace_id = "trc-invalid-ack";
+  ack_seed.spec.kind = ctrl::domain::CommandKind::HostReboot;
+  ack_seed.agent = {"AA:00:00:00:24:01", "agent-24-01"};
+  ack_seed.state = ctrl::domain::CommandState::Dispatched;
+  ack_seed.created_at_ms = clock.now_ms();
+  ack_seed.updated_at_ms = clock.now_ms();
+  require(command_repo.upsert(ack_seed, error), "seed invalid-ack command should succeed");
+
+  bool ack_rejected = false;
+  try {
+    service.on_command_ack(
+        "AA:00:00:00:24:01",
+        "cmd-invalid-ack",
+        ctrl::domain::CommandState::Running,
+        "trc-invalid-ack",
+        "running");
+  } catch (const std::invalid_argument& ex) {
+    ack_rejected = std::string(ex.what()).rfind("invalid state transition:", 0) == 0;
+  }
+  require(ack_rejected, "dispatched->running should be rejected");
+
+  ctrl::domain::CommandSnapshot loaded_ack;
+  require(command_repo.get("cmd-invalid-ack", loaded_ack, error), "invalid-ack command should exist");
+  require(
+      loaded_ack.state == ctrl::domain::CommandState::Dispatched,
+      "invalid ack transition should keep original state");
+  std::vector<ctrl::domain::CommandEvent> ack_events;
+  require(command_repo.list_events("cmd-invalid-ack", 100, ack_events, error), "invalid-ack events should be queryable");
+  bool has_ack_reject_event = false;
+  for (const auto& event : ack_events) {
+    if (event.type == "command_ack_rejected_invalid_transition") {
+      has_ack_reject_event = true;
+      break;
+    }
+  }
+  require(has_ack_reject_event, "invalid ack transition should append rejection event");
+
+  ctrl::domain::CommandSnapshot result_seed;
+  result_seed.spec.command_id = "cmd-invalid-result";
+  result_seed.spec.trace_id = "trc-invalid-result";
+  result_seed.spec.kind = ctrl::domain::CommandKind::HostReboot;
+  result_seed.agent = {"AA:00:00:00:24:01", "agent-24-01"};
+  result_seed.state = ctrl::domain::CommandState::Created;
+  result_seed.created_at_ms = clock.now_ms();
+  result_seed.updated_at_ms = clock.now_ms();
+  require(command_repo.upsert(result_seed, error), "seed invalid-result command should succeed");
+
+  bool result_rejected = false;
+  try {
+    service.on_command_result(
+        "AA:00:00:00:24:01",
+        "cmd-invalid-result",
+        ctrl::domain::CommandState::Succeeded,
+        0,
+        nlohmann::json{{"ok", true}},
+        "trc-invalid-result");
+  } catch (const std::invalid_argument& ex) {
+    result_rejected = std::string(ex.what()).rfind("invalid state transition:", 0) == 0;
+  }
+  require(result_rejected, "created->succeeded should be rejected");
+
+  ctrl::domain::CommandSnapshot loaded_result;
+  require(command_repo.get("cmd-invalid-result", loaded_result, error), "invalid-result command should exist");
+  require(
+      loaded_result.state == ctrl::domain::CommandState::Created,
+      "invalid result transition should keep original state");
+  std::vector<ctrl::domain::CommandEvent> result_events;
+  require(
+      command_repo.list_events("cmd-invalid-result", 100, result_events, error),
+      "invalid-result events should be queryable");
+  bool has_result_reject_event = false;
+  for (const auto& event : result_events) {
+    if (event.type == "command_result_rejected_invalid_transition") {
+      has_result_reject_event = true;
+      break;
+    }
+  }
+  require(has_result_reject_event, "invalid result transition should append rejection event");
 }
 
 void test_agent_registry_persist_failure_observable() {
@@ -1279,6 +1421,29 @@ void test_control_ws_use_cases_v5_contract() {
       loaded.result == nlohmann::json{{"ok", true}, {"source", "agent"}},
       "command result payload should use payload.result object");
 
+  bool missing_result_rejected = false;
+  try {
+    ws_use_cases.on_text(
+        ctrl::adapters::WsInboundMessage{
+            "sess-1",
+            ctrl::adapters::WsMessageKind::CommandResult,
+            "trc-result-missing-result",
+            "AA:00:00:00:50:01",
+            "agent-50-01",
+            ctrl::domain::CommandState::Succeeded,
+            "cmd-ws-usecase-result",
+            0,
+            nlohmann::json{
+                {"command_id", "cmd-ws-usecase-result"},
+                {"final_status", "succeeded"},
+                {"exit_code", 0},
+            }},
+        ws_out);
+  } catch (const std::invalid_argument& ex) {
+    missing_result_rejected = std::string(ex.what()) == "invalid command.result payload";
+  }
+  require(missing_result_rejected, "command.result without payload.result object should be rejected");
+
   ws_out.clear();
   ws_use_cases.on_text(
       ctrl::adapters::WsInboundMessage{
@@ -1333,6 +1498,33 @@ struct agent_action_gateway_fixture {
     clock.set(10000);
   }
 };
+
+void gateway_register_session(
+    agent_action_gateway_fixture& fixture,
+    const std::shared_ptr<fake_ws_connection>& conn,
+    const std::string& session_id,
+    std::string_view agent_mac,
+    std::string_view agent_id) {
+  app::ws::BusEnvelope reg;
+  reg.version = std::string(owt::protocol::v5::kProtocol);
+  reg.kind = std::string(owt::protocol::v5::kind::kAction);
+  reg.name = std::string(owt::protocol::v5::agent::kActionAgentRegister);
+  reg.id = "req-register";
+  reg.ts_ms = fixture.clock.now_ms();
+  reg.payload = nlohmann::json{
+      {"agent_mac", std::string(agent_mac)},
+      {"agent_id", std::string(agent_id)},
+  };
+  fixture.gateway.handle(conn, session_id, reg);
+
+  const auto sent = conn->sent_messages_snapshot();
+  require(sent.size() == 1, "register should return one envelope");
+  app::ws::BusEnvelope out;
+  std::string parse_error;
+  require(app::ws::parse_bus_envelope(sent.front(), out, parse_error), "register envelope should parse");
+  require(out.name == owt::protocol::v5::agent::kEventAgentRegistered, "register should be accepted");
+  conn->clear_sent_messages();
+}
 
 void test_agent_action_gateway_requires_payload_agent_mac_for_strict_actions() {
   const std::vector<std::pair<std::string, nlohmann::json>> cases = {
@@ -1399,11 +1591,267 @@ void test_agent_action_gateway_requires_payload_agent_mac_for_strict_actions() {
   }
 }
 
+void test_agent_action_gateway_requires_register_before_strict_actions() {
+  const std::vector<std::pair<std::string, nlohmann::json>> cases = {
+      {
+          std::string(owt::protocol::v5::agent::kActionAgentHeartbeat),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:61:01"},
+              {"heartbeat_at_ms", 10001},
+              {"stats", {{"cpu", 8}}},
+          },
+      },
+      {
+          std::string(owt::protocol::v5::agent::kActionCommandAck),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:61:01"},
+              {"command_id", "cmd-gateway-ack"},
+              {"status", "acked"},
+              {"message", "accepted"},
+          },
+      },
+      {
+          std::string(owt::protocol::v5::agent::kActionCommandResult),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:61:01"},
+              {"command_id", "cmd-gateway-result"},
+              {"final_status", "succeeded"},
+              {"exit_code", 0},
+              {"result", {{"ok", true}}},
+          },
+      },
+  };
+
+  for (size_t idx = 0; idx < cases.size(); ++idx) {
+    agent_action_gateway_fixture fixture;
+    auto conn = std::make_shared<fake_ws_connection>();
+    const auto session_id = "sess-gateway-unregistered-" + std::to_string(idx);
+    fixture.sessions.add_connection(session_id, conn);
+    fixture.ws_use_cases.on_open(session_id);
+
+    app::ws::BusEnvelope req;
+    req.version = std::string(owt::protocol::v5::kProtocol);
+    req.kind = std::string(owt::protocol::v5::kind::kAction);
+    req.name = cases[idx].first;
+    req.id = "req-unregistered-" + std::to_string(idx);
+    req.ts_ms = fixture.clock.now_ms();
+    req.payload = cases[idx].second;
+
+    fixture.gateway.handle(conn, session_id, req);
+
+    const auto sent = conn->sent_messages_snapshot();
+    require(sent.size() == 1, "unregistered strict action should return one error envelope");
+    app::ws::BusEnvelope out;
+    std::string parse_error;
+    require(app::ws::parse_bus_envelope(sent.front(), out, parse_error), "unregistered error envelope should parse");
+    require(out.kind == owt::protocol::v5::kind::kError, "unregistered strict action should return kind=error");
+    require(out.payload.value("code", std::string{}) == owt::protocol::v5::error_code::kInvalidParams, "unregistered strict action should return invalid_params");
+    require(out.payload.value("message", std::string{}) == "agent.register is required before agent actions", "unregistered strict action should return register-required message");
+  }
+}
+
+void test_agent_action_gateway_rejects_agent_mac_mismatch_for_registered_session() {
+  agent_action_gateway_fixture fixture;
+  auto conn = std::make_shared<fake_ws_connection>();
+  const std::string session_id = "sess-gateway-mismatch";
+  fixture.sessions.add_connection(session_id, conn);
+  fixture.ws_use_cases.on_open(session_id);
+  gateway_register_session(fixture, conn, session_id, "AA:00:00:00:62:01", "agent-62-01");
+
+  app::ws::BusEnvelope heartbeat;
+  heartbeat.version = std::string(owt::protocol::v5::kProtocol);
+  heartbeat.kind = std::string(owt::protocol::v5::kind::kAction);
+  heartbeat.name = std::string(owt::protocol::v5::agent::kActionAgentHeartbeat);
+  heartbeat.id = "req-mismatch-heartbeat";
+  heartbeat.ts_ms = fixture.clock.now_ms();
+  heartbeat.payload = nlohmann::json{
+      {"agent_mac", "AA:00:00:00:62:02"},
+      {"heartbeat_at_ms", fixture.clock.now_ms()},
+      {"stats", {{"cpu", 9}}},
+  };
+  fixture.gateway.handle(conn, session_id, heartbeat);
+
+  const auto sent = conn->sent_messages_snapshot();
+  require(sent.size() == 1, "mismatched agent_mac should return one error envelope");
+  app::ws::BusEnvelope out;
+  std::string parse_error;
+  require(app::ws::parse_bus_envelope(sent.front(), out, parse_error), "mismatch error envelope should parse");
+  require(out.payload.value("code", std::string{}) == owt::protocol::v5::error_code::kInvalidParams, "mismatched agent_mac should return invalid_params");
+  require(out.payload.value("message", std::string{}) == "payload.agent_mac does not match registered session agent", "mismatched agent_mac should return mismatch message");
+}
+
+void test_action_envelope_validator_rejects_target_for_action() {
+  test_clock clock;
+  clock.set(8800);
+
+  struct test_case {
+    app::bootstrap::runtime::WsPeer peer = app::bootstrap::runtime::WsPeer::Ui;
+    std::string text;
+  };
+
+  const std::vector<test_case> cases = {
+      {
+          app::bootstrap::runtime::WsPeer::Ui,
+          R"({"v":"v5","kind":"action","name":"session.subscribe","id":"req-ui-target","ts_ms":1,"target":"AA:00:00:00:90:01","payload":{"scope":"agent","agent_mac":"AA:00:00:00:90:01"}})",
+      },
+      {
+          app::bootstrap::runtime::WsPeer::Agent,
+          R"({"v":"v5","kind":"action","name":"command.ack","id":"req-agent-target","ts_ms":2,"target":"AA:00:00:00:90:02","payload":{"agent_mac":"AA:00:00:00:90:02","command_id":"cmd-target","status":"acked"}})",
+      },
+  };
+
+  for (const auto& tc : cases) {
+    auto conn = std::make_shared<fake_ws_connection>();
+    app::ws::BusEnvelope out{};
+    require(
+        !app::bootstrap::runtime::parse_and_validate_action_envelope(
+            tc.peer,
+            tc.text,
+            clock,
+            conn,
+            out),
+        "action envelope with target should be rejected");
+
+    const auto sent = conn->sent_messages_snapshot();
+    require(sent.size() == 1, "action target rejection should return one error envelope");
+    app::ws::BusEnvelope err{};
+    std::string parse_error;
+    require(app::ws::parse_bus_envelope(sent.front(), err, parse_error), "target rejection envelope should parse");
+    require(err.kind == owt::protocol::v5::kind::kError, "action target rejection should return kind=error");
+    require(
+        err.payload.value("code", std::string{}) == owt::protocol::v5::error_code::kBadEnvelope,
+        "action target rejection should return bad_envelope");
+    require(
+        err.payload.value("message", std::string{}) == "target is not allowed for action",
+        "action target rejection message mismatch");
+  }
+}
+
+void test_agent_action_gateway_rejects_legacy_payload_fields() {
+  agent_action_gateway_fixture fixture;
+  auto conn = std::make_shared<fake_ws_connection>();
+  const std::string session_id = "sess-gateway-legacy-fields";
+  fixture.sessions.add_connection(session_id, conn);
+  fixture.ws_use_cases.on_open(session_id);
+
+  struct test_case {
+    std::string name;
+    nlohmann::json payload;
+    std::string expected_message;
+  };
+
+  const std::vector<test_case> register_cases = {
+      {
+          std::string(owt::protocol::v5::agent::kActionAgentRegister),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:64:01"},
+              {"stats", nlohmann::json::object()},
+          },
+          "unknown field in agent.register payload: stats",
+      },
+      {
+          std::string(owt::protocol::v5::agent::kActionAgentRegister),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:64:01"},
+              {"version", "0.2.0"},
+          },
+          "unknown field in agent.register payload: version",
+      },
+  };
+
+  for (size_t idx = 0; idx < register_cases.size(); ++idx) {
+    app::ws::BusEnvelope req;
+    req.version = std::string(owt::protocol::v5::kProtocol);
+    req.kind = std::string(owt::protocol::v5::kind::kAction);
+    req.name = register_cases[idx].name;
+    req.id = "req-register-legacy-" + std::to_string(idx);
+    req.ts_ms = fixture.clock.now_ms();
+    req.payload = register_cases[idx].payload;
+    fixture.gateway.handle(conn, session_id, req);
+
+    const auto sent = conn->sent_messages_snapshot();
+    require(sent.size() == 1, "legacy register payload should return one error envelope");
+    app::ws::BusEnvelope out;
+    std::string parse_error;
+    require(app::ws::parse_bus_envelope(sent.front(), out, parse_error), "legacy register error should parse");
+    require(
+        out.payload.value("code", std::string{}) == owt::protocol::v5::error_code::kInvalidParams,
+        "legacy register payload should return invalid_params");
+    require(
+        out.payload.value("message", std::string{}) == register_cases[idx].expected_message,
+        "legacy register payload message mismatch");
+    conn->clear_sent_messages();
+  }
+
+  gateway_register_session(fixture, conn, session_id, "AA:00:00:00:64:01", "agent-64-01");
+
+  const std::vector<test_case> strict_action_cases = {
+      {
+          std::string(owt::protocol::v5::agent::kActionAgentHeartbeat),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:64:01"},
+              {"agent_id", "legacy"},
+              {"heartbeat_at_ms", fixture.clock.now_ms()},
+              {"stats", nlohmann::json::object()},
+          },
+          "unknown field in agent.heartbeat payload: agent_id",
+      },
+      {
+          std::string(owt::protocol::v5::agent::kActionCommandAck),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:64:01"},
+              {"agent_id", "legacy"},
+              {"command_id", "cmd-legacy-ack"},
+              {"status", "acked"},
+          },
+          "unknown field in command.ack payload: agent_id",
+      },
+      {
+          std::string(owt::protocol::v5::agent::kActionCommandResult),
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:64:01"},
+              {"agent_id", "legacy"},
+              {"command_id", "cmd-legacy-result"},
+              {"final_status", "succeeded"},
+              {"exit_code", 0},
+              {"result", nlohmann::json::object()},
+          },
+          "unknown field in command.result payload: agent_id",
+      },
+  };
+
+  for (size_t idx = 0; idx < strict_action_cases.size(); ++idx) {
+    app::ws::BusEnvelope req;
+    req.version = std::string(owt::protocol::v5::kProtocol);
+    req.kind = std::string(owt::protocol::v5::kind::kAction);
+    req.name = strict_action_cases[idx].name;
+    req.id = "req-strict-legacy-" + std::to_string(idx);
+    req.ts_ms = fixture.clock.now_ms();
+    req.payload = strict_action_cases[idx].payload;
+    fixture.gateway.handle(conn, session_id, req);
+
+    const auto sent = conn->sent_messages_snapshot();
+    require(sent.size() == 1, "legacy strict-action payload should return one error envelope");
+    app::ws::BusEnvelope out;
+    std::string parse_error;
+    require(app::ws::parse_bus_envelope(sent.front(), out, parse_error), "legacy strict-action error should parse");
+    require(
+        out.payload.value("code", std::string{}) == owt::protocol::v5::error_code::kInvalidParams,
+        "legacy strict-action payload should return invalid_params");
+    require(
+        out.payload.value("message", std::string{}) == strict_action_cases[idx].expected_message,
+        "legacy strict-action payload message mismatch");
+    conn->clear_sent_messages();
+  }
+}
+
 void test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions() {
   agent_action_gateway_fixture fixture;
   auto conn = std::make_shared<fake_ws_connection>();
   const std::string session_id = "sess-gateway-strict-ok";
   fixture.sessions.add_connection(session_id, conn);
+  fixture.ws_use_cases.on_open(session_id);
+  gateway_register_session(fixture, conn, session_id, "AA:00:00:00:60:01", "agent-60-01");
 
   app::ws::BusEnvelope heartbeat;
   heartbeat.version = std::string(owt::protocol::v5::kProtocol);
@@ -1413,7 +1861,6 @@ void test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions() {
   heartbeat.ts_ms = fixture.clock.now_ms();
   heartbeat.payload = nlohmann::json{
       {"agent_mac", "AA:00:00:00:60:01"},
-      {"agent_id", "agent-60-01"},
       {"heartbeat_at_ms", fixture.clock.now_ms()},
       {"stats", {{"cpu", 9}}},
   };
@@ -1444,7 +1891,6 @@ void test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions() {
   ack.ts_ms = fixture.clock.now_ms();
   ack.payload = nlohmann::json{
       {"agent_mac", "AA:00:00:00:60:01"},
-      {"agent_id", "agent-60-01"},
       {"command_id", "cmd-gateway-strict"},
       {"status", "acked"},
       {"message", "accepted"},
@@ -1459,7 +1905,6 @@ void test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions() {
   result.ts_ms = fixture.clock.now_ms();
   result.payload = nlohmann::json{
       {"agent_mac", "AA:00:00:00:60:01"},
-      {"agent_id", "agent-60-01"},
       {"command_id", "cmd-gateway-strict"},
       {"final_status", "succeeded"},
       {"exit_code", 0},
@@ -1480,6 +1925,64 @@ void test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions() {
   require(
       loaded.result == nlohmann::json{{"ok", true}, {"source", "gateway-test"}},
       "gateway strict command should persist payload.result");
+}
+
+void test_agent_action_gateway_rejects_command_owner_mismatch() {
+  agent_action_gateway_fixture fixture;
+  auto conn = std::make_shared<fake_ws_connection>();
+  const std::string session_id = "sess-gateway-owner-mismatch";
+  fixture.sessions.add_connection(session_id, conn);
+  fixture.ws_use_cases.on_open(session_id);
+  gateway_register_session(fixture, conn, session_id, "AA:00:00:00:63:01", "agent-63-01");
+
+  ctrl::domain::CommandSnapshot seeded;
+  seeded.spec.command_id = "cmd-owner-mismatch";
+  seeded.spec.trace_id = "trc-owner-mismatch";
+  seeded.spec.kind = ctrl::domain::CommandKind::HostReboot;
+  seeded.agent = {"AA:00:00:00:63:02", "agent-63-02"};
+  seeded.state = ctrl::domain::CommandState::Dispatched;
+  seeded.created_at_ms = fixture.clock.now_ms();
+  seeded.updated_at_ms = fixture.clock.now_ms();
+  std::string error;
+  require(fixture.command_repo.upsert(seeded, error), "seed command for owner mismatch should succeed");
+
+  app::ws::BusEnvelope ack;
+  ack.version = std::string(owt::protocol::v5::kProtocol);
+  ack.kind = std::string(owt::protocol::v5::kind::kAction);
+  ack.name = std::string(owt::protocol::v5::agent::kActionCommandAck);
+  ack.id = "req-owner-mismatch-ack";
+  ack.ts_ms = fixture.clock.now_ms();
+  ack.payload = nlohmann::json{
+      {"agent_mac", "AA:00:00:00:63:01"},
+      {"command_id", "cmd-owner-mismatch"},
+      {"status", "acked"},
+      {"message", "accepted"},
+  };
+  fixture.gateway.handle(conn, session_id, ack);
+
+  const auto sent = conn->sent_messages_snapshot();
+  require(sent.size() == 1, "owner mismatch should return one error envelope");
+  app::ws::BusEnvelope out;
+  std::string parse_error;
+  require(app::ws::parse_bus_envelope(sent.front(), out, parse_error), "owner mismatch envelope should parse");
+  require(out.payload.value("code", std::string{}) == owt::protocol::v5::error_code::kInvalidParams, "owner mismatch should return invalid_params");
+
+  ctrl::domain::CommandSnapshot loaded;
+  require(fixture.command_repo.get("cmd-owner-mismatch", loaded, error), "owner mismatch command should exist");
+  require(loaded.state == ctrl::domain::CommandState::Dispatched, "owner mismatch should not change command state");
+
+  std::vector<ctrl::domain::CommandEvent> events;
+  require(
+      fixture.command_repo.list_events("cmd-owner-mismatch", 100, events, error),
+      "owner mismatch events should be queryable");
+  bool has_reject = false;
+  for (const auto& event : events) {
+    if (event.type == "command_ack_rejected_agent_mismatch") {
+      has_reject = true;
+      break;
+    }
+  }
+  require(has_reject, "owner mismatch should append rejection event");
 }
 
 void test_sqlite_store_repository() {
@@ -1816,14 +2319,20 @@ int main() {
     test_command_bus_envelope_v5_codec();
     test_command_orchestrator_submit();
     test_agent_message_terminal_once();
+    test_agent_message_rejects_invalid_transition();
     test_agent_registry_persist_failure_observable();
     test_ui_session_registry_non_blocking_backpressure();
     test_retry_service();
     test_params_rate_limiter_redaction();
     test_presenter_command_redaction();
     test_control_ws_use_cases_v5_contract();
+    test_action_envelope_validator_rejects_target_for_action();
     test_agent_action_gateway_requires_payload_agent_mac_for_strict_actions();
+    test_agent_action_gateway_requires_register_before_strict_actions();
+    test_agent_action_gateway_rejects_agent_mac_mismatch_for_registered_session();
+    test_agent_action_gateway_rejects_legacy_payload_fields();
     test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions();
+    test_agent_action_gateway_rejects_command_owner_mismatch();
     test_sqlite_store_repository();
     test_startup_mark_all_agents_offline();
     test_sqlite_store_legacy_backup_and_rebuild();

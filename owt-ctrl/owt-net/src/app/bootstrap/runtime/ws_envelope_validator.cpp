@@ -89,6 +89,10 @@ bool parse_and_validate_action_envelope(
     send_bad_kind(peer, clock, conn, out);
     return false;
   }
+  if (!out.target.empty()) {
+    send_bad_envelope(peer, clock, conn, "target is not allowed for action");
+    return false;
+  }
 
   return true;
 }

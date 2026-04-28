@@ -263,7 +263,6 @@ control::envelope make_dispatch_envelope(
     int64_t now_ms) {
   control::command cmd;
   cmd.command_id = command_id;
-  cmd.idempotency_key = command_id;
   cmd.type = control::command_type::host_reboot;
   cmd.issued_at_ms = now_ms;
   cmd.expires_at_ms = now_ms + 60000;
@@ -291,7 +290,6 @@ control::envelope make_register_envelope(
   out.version = control::current_protocol_version();
   out.id = request_id;
   out.ts_ms = now_ms;
-  out.target = agent_mac;
   out.payload = control::register_payload{
       agent_mac,
       agent_id,
@@ -311,10 +309,8 @@ control::envelope make_ack_envelope(
   out.version = control::current_protocol_version();
   out.id = request_id;
   out.ts_ms = now_ms;
-  out.target = agent_mac;
   out.payload = control::command_ack_payload{
       agent_mac,
-      "agent-reconnect",
       command_id,
       control::command_status::acked,
       "accepted"};
@@ -331,10 +327,8 @@ control::envelope make_result_envelope(
   out.version = control::current_protocol_version();
   out.id = request_id;
   out.ts_ms = now_ms;
-  out.target = agent_mac;
   out.payload = control::command_result_payload{
       agent_mac,
-      "agent-reconnect",
       command_id,
       control::command_status::succeeded,
       0,
@@ -351,10 +345,8 @@ control::envelope make_heartbeat_envelope(
   out.version = control::current_protocol_version();
   out.id = request_id;
   out.ts_ms = now_ms;
-  out.target = agent_mac;
   out.payload = control::heartbeat_payload{
       agent_mac,
-      "agent-reconnect",
       now_ms,
       nlohmann::json{{"cpu", 5}}};
   return out;
@@ -384,7 +376,6 @@ void test_ack_running_result_sequence() {
 
   control::command cmd;
   cmd.command_id = "cmd-1";
-  cmd.idempotency_key = "cmd-1";
   cmd.type = control::command_type::host_reboot;
   cmd.issued_at_ms = control::unix_time_ms_now();
   cmd.expires_at_ms = cmd.issued_at_ms + 60000;
@@ -419,20 +410,20 @@ void test_ack_running_result_sequence() {
   const auto* ack1 = std::get_if<control::command_ack_payload>(&sent[0].payload);
   require(ack1 != nullptr, "first outbound payload should be command_ack_payload");
   require(ack1->agent_mac == options.agent_mac, "first ack should carry agent_mac");
-  require(ack1->agent_id == options.agent_id, "first ack should carry agent_id");
   require(ack1->status == control::command_status::acked, "first ack should be ACKED");
+  require(sent[0].target.empty(), "first ack should not carry target");
 
   const auto* ack2 = std::get_if<control::command_ack_payload>(&sent[1].payload);
   require(ack2 != nullptr, "second outbound payload should be command_ack_payload");
   require(ack2->agent_mac == options.agent_mac, "second ack should carry agent_mac");
-  require(ack2->agent_id == options.agent_id, "second ack should carry agent_id");
   require(ack2->status == control::command_status::running, "second ack should be RUNNING");
+  require(sent[1].target.empty(), "second ack should not carry target");
 
   const auto* result = std::get_if<control::command_result_payload>(&sent[2].payload);
   require(result != nullptr, "third outbound payload should be command_result_payload");
   require(result->agent_mac == options.agent_mac, "result should carry agent_mac");
-  require(result->agent_id == options.agent_id, "result should carry agent_id");
   require(result->final_status == control::command_status::succeeded, "final status should be SUCCEEDED");
+  require(sent[2].target.empty(), "result should not carry target");
 
   raw_channel->emit_message(dispatch);
   require(
@@ -447,8 +438,8 @@ void test_ack_running_result_sequence() {
   const auto* dup_ack = std::get_if<control::command_ack_payload>(&after_duplicate[3].payload);
   require(dup_ack != nullptr, "duplicate outbound payload should be command_ack_payload");
   require(dup_ack->agent_mac == options.agent_mac, "duplicate ack should carry agent_mac");
-  require(dup_ack->agent_id == options.agent_id, "duplicate ack should carry agent_id");
   require(dup_ack->status == control::command_status::acked, "duplicate command should only emit ACKED");
+  require(after_duplicate[3].target.empty(), "duplicate ack should not carry target");
 
   runtime.stop();
 }
@@ -540,6 +531,53 @@ void test_seen_command_cache_ttl() {
   fake_now_ms += 150;
   raw_channel->emit_message(make_dispatch_envelope("req-t-3", options.agent_mac, "cmd-ttl-1", fake_now_ms));
   require(wait_until([raw_channel]() { return raw_channel->sent_messages().size() >= 7; }, 2000), "ttl step3");
+
+  runtime.stop();
+}
+
+void test_start_rejects_unsupported_protocol_version() {
+  auto channel = std::make_unique<fake_control_channel>();
+  control::agent_runtime runtime(std::move(channel));
+
+  control::agent_runtime_options options;
+  options.agent_id = "agent-version-check";
+  options.agent_mac = "AA:00:00:00:00:21";
+  options.wss_endpoint = "ws://test/ws/v5/agent";
+  options.protocol_version = "v4";
+
+  require(!runtime.start(options), "runtime should reject unsupported protocol version");
+  require(!runtime.is_running(), "runtime should stay stopped for unsupported protocol version");
+}
+
+void test_dispatch_target_mismatch_is_ignored() {
+  auto channel = std::make_unique<fake_control_channel>();
+  auto* raw_channel = channel.get();
+
+  control::agent_runtime runtime(std::move(channel));
+  runtime.register_command_executor(
+      control::command_type::host_reboot,
+      [](const control::command&, const nlohmann::json&) {
+        control::command_execution_result out;
+        out.status = control::command_status::succeeded;
+        out.exit_code = 0;
+        out.result = nlohmann::json{{"ok", true}};
+        return out;
+      });
+
+  control::agent_runtime_options options;
+  options.agent_id = "agent-target-check";
+  options.agent_mac = "AA:00:00:00:00:22";
+  options.wss_endpoint = "ws://test/ws/v5/agent";
+  options.ws_event_workers = 1;
+
+  require(runtime.start(options), "runtime start failed (target mismatch)");
+
+  raw_channel->emit_message(make_dispatch_envelope("req-target-mismatch", "AA:00:00:00:FF:FF", "cmd-target-1", 33000));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  require(
+      raw_channel->sent_messages().empty(),
+      "target mismatch dispatch should be ignored without ACK/result");
 
   runtime.stop();
 }
@@ -658,6 +696,8 @@ int main() {
     test_ack_running_result_sequence();
     test_seen_command_cache_capacity();
     test_seen_command_cache_ttl();
+    test_start_rejects_unsupported_protocol_version();
+    test_dispatch_target_mismatch_is_ignored();
     test_config_parser_rejects_trailing_numeric_garbage();
     test_wss_reconnect_reliable_outbound_queue();
     log::shutdown();

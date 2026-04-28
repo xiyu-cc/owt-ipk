@@ -22,5 +22,12 @@ export const COMMAND_BUS_EVENTS = Object.freeze({
 })
 
 export const COMMAND_BUS_ERROR_CODES = Object.freeze({
-  RATE_LIMITED: 'rate_limited'
+  BAD_ENVELOPE: 'bad_envelope',
+  UNSUPPORTED_VERSION: 'unsupported_version',
+  BAD_KIND: 'bad_kind',
+  METHOD_NOT_FOUND: 'method_not_found',
+  INVALID_PARAMS: 'invalid_params',
+  RATE_LIMITED: 'rate_limited',
+  INTERNAL_ERROR: 'internal_error',
+  NOT_FOUND: 'not_found'
 })

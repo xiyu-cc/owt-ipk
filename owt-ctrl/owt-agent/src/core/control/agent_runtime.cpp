@@ -90,6 +90,14 @@ bool agent_runtime::start(const agent_runtime_options& options) {
     return true;
   }
 
+  if (!is_supported_protocol_version(options.protocol_version)) {
+    log::error(
+        "agent runtime start failed: unsupported protocol_version={}, expected={}",
+        options.protocol_version,
+        current_protocol_version());
+    return false;
+  }
+
   options_ = options;
   running_.store(true, std::memory_order_relaxed);
 
@@ -184,7 +192,7 @@ bool agent_runtime::send_control_message(
   message.version = options_.protocol_version;
   message.id = request_id.is_null() ? nlohmann::json(make_message_id()) : request_id;
   message.ts_ms = unix_time_ms_now();
-  message.target = options_.agent_mac;
+  message.target.clear();
   message.payload = std::move(data);
   return ch->send(message);
 }
@@ -219,7 +227,6 @@ bool agent_runtime::send_heartbeat() {
       make_message_id(),
       heartbeat_payload{
           options_.agent_mac,
-          options_.agent_id,
           unix_time_ms_now(),
           heartbeat_builder_.build_stats()});
 }
@@ -234,7 +241,6 @@ bool agent_runtime::send_command_ack(
       request_id,
       command_ack_payload{
           options_.agent_mac,
-          options_.agent_id,
           command_id,
           status,
           std::string(message)});
@@ -389,7 +395,16 @@ void agent_runtime::handle_channel_message(const envelope& message) {
           .on_invalid_message = [](const std::string& reason) {
             log::warn("control channel invalid message: {}", reason);
           },
-          .on_command_dispatch = [this](const nlohmann::json& request_id, const command& cmd) {
+          .on_command_dispatch = [this](const envelope& message, const command& cmd) {
+            if (!message.target.empty() && message.target != options_.agent_mac) {
+              log::warn(
+                  "command dispatch ignored: target mismatch, command_id={}, target={}, local_agent_mac={}",
+                  cmd.command_id,
+                  message.target,
+                  options_.agent_mac);
+              return;
+            }
+            const auto& request_id = message.id;
             if (!send_command_ack(request_id, cmd.command_id, command_status::acked, "accepted")) {
               log::warn("command ack send failed: command_id={}", cmd.command_id);
               return;
@@ -504,7 +519,6 @@ bool agent_runtime::send_command_result(
       request_id,
       command_result_payload{
           options_.agent_mac,
-          options_.agent_id,
           command_id,
           final_status,
           exit_code,

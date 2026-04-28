@@ -399,7 +399,6 @@ bool DrogonAgentChannel::send_command(
       {"command",
        {
            {"command_id", cmd.command_id},
-           {"idempotency_key", cmd.command_id.empty() ? cmd.trace_id : cmd.command_id},
            {"command_type", ctrl::domain::to_string(cmd.kind)},
            {"issued_at_ms", now_ms},
            {"expires_at_ms", cmd.expires_at_ms},

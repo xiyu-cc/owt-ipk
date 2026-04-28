@@ -42,6 +42,34 @@ inline constexpr std::string_view kErrorServerError = "server.error";
 
 } // namespace agent
 
+namespace command {
+
+namespace type {
+
+inline constexpr std::string_view kWolWake = "wol_wake";
+inline constexpr std::string_view kHostReboot = "host_reboot";
+inline constexpr std::string_view kHostPoweroff = "host_poweroff";
+inline constexpr std::string_view kMonitoringSet = "monitoring_set";
+inline constexpr std::string_view kParamsSet = "params_set";
+
+} // namespace type
+
+namespace state {
+
+inline constexpr std::string_view kCreated = "created";
+inline constexpr std::string_view kDispatched = "dispatched";
+inline constexpr std::string_view kAcked = "acked";
+inline constexpr std::string_view kRunning = "running";
+inline constexpr std::string_view kRetryPending = "retry_pending";
+inline constexpr std::string_view kSucceeded = "succeeded";
+inline constexpr std::string_view kFailed = "failed";
+inline constexpr std::string_view kTimedOut = "timed_out";
+inline constexpr std::string_view kCancelled = "cancelled";
+
+} // namespace state
+
+} // namespace command
+
 namespace json {
 
 inline constexpr std::string_view kVersion = "v";

@@ -13,7 +13,7 @@ public:
     std::function<void(const std::string& remote_version)> on_unsupported_protocol;
     std::function<void(const error_payload&)> on_server_error;
     std::function<void(const std::string& reason)> on_invalid_message;
-    std::function<void(const nlohmann::json& request_id, const command& cmd)> on_command_dispatch;
+    std::function<void(const envelope& message, const command& cmd)> on_command_dispatch;
   };
 
   explicit agent_runtime_message_router(std::string local_protocol_version);

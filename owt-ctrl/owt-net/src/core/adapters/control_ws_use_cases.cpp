@@ -4,6 +4,7 @@
 #include "owt/protocol/v5/contract.h"
 
 #include <stdexcept>
+#include <initializer_list>
 #include <string>
 
 namespace ctrl::adapters {
@@ -26,8 +27,42 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
     throw std::invalid_argument("session_token is required");
   }
 
+  auto ensure_strict_action_session_binding = [&]() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    const auto it = session_agents_.find(in.session_token);
+    if (it == session_agents_.end() || it->second.empty()) {
+      throw std::invalid_argument("agent.register is required before agent actions");
+    }
+    if (it->second != in.agent_mac) {
+      throw std::invalid_argument("payload.agent_mac does not match registered session agent");
+    }
+  };
+
+  auto ensure_payload_fields = [&](std::string_view action_name, std::initializer_list<std::string_view> allowed) {
+    if (!in.payload.is_object()) {
+      throw std::invalid_argument("payload must be object");
+    }
+    for (auto it = in.payload.begin(); it != in.payload.end(); ++it) {
+      const auto key = it.key();
+      bool allowed_key = false;
+      for (const auto candidate : allowed) {
+        if (key == candidate) {
+          allowed_key = true;
+          break;
+        }
+      }
+      if (!allowed_key) {
+        throw std::invalid_argument(
+            "unknown field in " + std::string(action_name) + " payload: " + key);
+      }
+    }
+  };
+
   switch (in.kind) {
     case WsMessageKind::Register: {
+      ensure_payload_fields(
+          owt::protocol::v5::agent::kActionAgentRegister,
+          {"agent_mac", "agent_id", "site_id", "agent_version", "capabilities"});
       if (in.agent_mac.empty()) {
         log::warn(
             "reject register: missing agent_mac, session_token={}, trace_id={}",
@@ -74,6 +109,9 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
       return;
     }
     case WsMessageKind::Heartbeat: {
+      ensure_payload_fields(
+          owt::protocol::v5::agent::kActionAgentHeartbeat,
+          {"agent_mac", "heartbeat_at_ms", "stats"});
       if (in.agent_mac.empty()) {
         log::warn(
             "ignore heartbeat: missing agent_mac, session_token={}, trace_id={}",
@@ -81,6 +119,7 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
             in.trace_id);
         return;
       }
+      ensure_strict_action_session_binding();
       const int64_t heartbeat_at_ms =
           (in.payload.contains("heartbeat_at_ms") && in.payload["heartbeat_at_ms"].is_number_integer())
               ? in.payload["heartbeat_at_ms"].get<int64_t>()
@@ -93,6 +132,10 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
       return;
     }
     case WsMessageKind::CommandAck:
+      ensure_payload_fields(
+          owt::protocol::v5::agent::kActionCommandAck,
+          {"agent_mac", "command_id", "status", "message"});
+      ensure_strict_action_session_binding();
       messages_.on_command_ack(
           in.agent_mac,
           in.command_id,
@@ -101,14 +144,19 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
           in.payload.value("message", ""));
       return;
     case WsMessageKind::CommandResult:
+      ensure_payload_fields(
+          owt::protocol::v5::agent::kActionCommandResult,
+          {"agent_mac", "command_id", "final_status", "exit_code", "result"});
+      ensure_strict_action_session_binding();
+      if (!in.payload.contains("result") || !in.payload["result"].is_object()) {
+        throw std::invalid_argument("invalid command.result payload");
+      }
       messages_.on_command_result(
           in.agent_mac,
           in.command_id,
           in.command_state,
           in.exit_code,
-          (in.payload.contains("result") && in.payload["result"].is_object())
-              ? in.payload["result"]
-              : in.payload,
+          in.payload["result"],
           in.trace_id);
       return;
     case WsMessageKind::Unknown:

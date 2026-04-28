@@ -5,6 +5,7 @@
 #include "owt/protocol/v5/contract.h"
 
 #include <stdexcept>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,56 @@ std::string require_payload_agent_mac(
     throw std::invalid_argument("agent_mac is required");
   }
   return req.payload["agent_mac"].get<std::string>();
+}
+
+void reject_unknown_payload_fields(
+    const nlohmann::json& payload,
+    std::string_view action_name,
+    std::initializer_list<std::string_view> allowed) {
+  if (!payload.is_object()) {
+    throw std::invalid_argument("payload must be object");
+  }
+  for (auto it = payload.begin(); it != payload.end(); ++it) {
+    const auto key = it.key();
+    bool allowed_key = false;
+    for (const auto candidate : allowed) {
+      if (key == candidate) {
+        allowed_key = true;
+        break;
+      }
+    }
+    if (!allowed_key) {
+      throw std::invalid_argument(
+          "unknown field in " + std::string(action_name) + " payload: " + key);
+    }
+  }
+}
+
+void enforce_bound_agent_for_strict_action(
+    AgentSessionRegistry& agent_sessions,
+    std::string_view session_id,
+    std::string_view payload_agent_mac,
+    std::string_view action_name,
+    const nlohmann::json& request_id) {
+  const auto bound_agent_mac = agent_sessions.find_agent_for_session(session_id);
+  if (bound_agent_mac.empty()) {
+    log::warn(
+        "reject agent action: action={}, session_id={}, req_id={}, reason=session not registered",
+        action_name,
+        session_id,
+        request_id_to_text(request_id));
+    throw std::invalid_argument("agent.register is required before agent actions");
+  }
+  if (bound_agent_mac != payload_agent_mac) {
+    log::warn(
+        "reject agent action: action={}, session_id={}, req_id={}, reason=agent_mac mismatch, bound_agent_mac={}, payload_agent_mac={}",
+        action_name,
+        session_id,
+        request_id_to_text(request_id),
+        bound_agent_mac,
+        payload_agent_mac);
+    throw std::invalid_argument("payload.agent_mac does not match registered session agent");
+  }
 }
 
 } // namespace
@@ -92,6 +143,10 @@ void AgentActionGateway::handle_register(
     const drogon::WebSocketConnectionPtr& conn,
     const std::string& session_id,
     const ws::BusEnvelope& req) {
+  reject_unknown_payload_fields(
+      req.payload,
+      owt::protocol::v5::agent::kActionAgentRegister,
+      {"agent_mac", "agent_id", "site_id", "agent_version", "capabilities"});
   if (!req.payload.contains("agent_mac") || !req.payload["agent_mac"].is_string() ||
       req.payload["agent_mac"].get<std::string>().empty()) {
     throw std::invalid_argument("agent_mac is required");
@@ -144,7 +199,17 @@ void AgentActionGateway::handle_heartbeat(
     const std::string& session_id,
     const ws::BusEnvelope& req) {
   (void)conn;
+  reject_unknown_payload_fields(
+      req.payload,
+      owt::protocol::v5::agent::kActionAgentHeartbeat,
+      {"agent_mac", "heartbeat_at_ms", "stats"});
   const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionAgentHeartbeat);
+  enforce_bound_agent_for_strict_action(
+      agent_sessions_,
+      session_id,
+      agent_mac,
+      owt::protocol::v5::agent::kActionAgentHeartbeat,
+      req.id);
 
   const int64_t heartbeat_at_ms =
       (req.payload.contains("heartbeat_at_ms") && req.payload["heartbeat_at_ms"].is_number_integer())
@@ -160,7 +225,6 @@ void AgentActionGateway::handle_heartbeat(
   in.kind = ctrl::adapters::WsMessageKind::Heartbeat;
   in.trace_id = req.id.is_string() ? req.id.get<std::string>() : trace_id_fn_();
   in.agent_mac = agent_mac;
-  in.agent_id = req.payload.value("agent_id", agent_mac);
   in.payload = req.payload;
   in.payload["heartbeat_at_ms"] = heartbeat_at_ms;
   in.payload["stats"] = stats;
@@ -174,7 +238,17 @@ void AgentActionGateway::handle_command_ack(
     const std::string& session_id,
     const ws::BusEnvelope& req) {
   (void)conn;
+  reject_unknown_payload_fields(
+      req.payload,
+      owt::protocol::v5::agent::kActionCommandAck,
+      {"agent_mac", "command_id", "status", "message"});
   const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionCommandAck);
+  enforce_bound_agent_for_strict_action(
+      agent_sessions_,
+      session_id,
+      agent_mac,
+      owt::protocol::v5::agent::kActionCommandAck,
+      req.id);
   if (!req.payload.contains("command_id") || !req.payload["command_id"].is_string() ||
       req.payload["command_id"].get<std::string>().empty() || !req.payload.contains("status") ||
       !req.payload["status"].is_string()) {
@@ -191,7 +265,6 @@ void AgentActionGateway::handle_command_ack(
   in.kind = ctrl::adapters::WsMessageKind::CommandAck;
   in.trace_id = req.id.is_string() ? req.id.get<std::string>() : trace_id_fn_();
   in.agent_mac = agent_mac;
-  in.agent_id = req.payload.value("agent_id", agent_mac);
   in.command_state = state;
   in.command_id = req.payload["command_id"].get<std::string>();
   in.payload = req.payload;
@@ -205,7 +278,17 @@ void AgentActionGateway::handle_command_result(
     const std::string& session_id,
     const ws::BusEnvelope& req) {
   (void)conn;
+  reject_unknown_payload_fields(
+      req.payload,
+      owt::protocol::v5::agent::kActionCommandResult,
+      {"agent_mac", "command_id", "final_status", "exit_code", "result"});
   const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionCommandResult);
+  enforce_bound_agent_for_strict_action(
+      agent_sessions_,
+      session_id,
+      agent_mac,
+      owt::protocol::v5::agent::kActionCommandResult,
+      req.id);
   if (!req.payload.contains("command_id") || !req.payload["command_id"].is_string() ||
       req.payload["command_id"].get<std::string>().empty() || !req.payload.contains("final_status") ||
       !req.payload["final_status"].is_string() || !req.payload.contains("exit_code") ||
@@ -224,7 +307,6 @@ void AgentActionGateway::handle_command_result(
   in.kind = ctrl::adapters::WsMessageKind::CommandResult;
   in.trace_id = req.id.is_string() ? req.id.get<std::string>() : trace_id_fn_();
   in.agent_mac = agent_mac;
-  in.agent_id = req.payload.value("agent_id", agent_mac);
   in.command_state = final_state;
   in.command_id = req.payload["command_id"].get<std::string>();
   in.exit_code = req.payload["exit_code"].get<int>();
