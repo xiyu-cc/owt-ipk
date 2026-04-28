@@ -144,8 +144,6 @@ void AgentActionGateway::handle_register(
   const auto agent_mac = req.payload["agent_mac"].get<std::string>();
   const auto agent_id = req.payload.value("agent_id", agent_mac);
 
-  agent_sessions_.bind_agent(session_id, agent_mac, agent_id);
-
   ctrl::adapters::WsInboundMessage in;
   in.session_token = session_id;
   in.kind = ctrl::adapters::WsMessageKind::Register;
@@ -156,8 +154,13 @@ void AgentActionGateway::handle_register(
 
   std::vector<ctrl::adapters::WsOutboundMessage> out;
   control_ws_use_cases_.on_text(in, out);
+  bool register_accepted = false;
   for (const auto& item : out) {
     if (item.type == owt::protocol::v5::agent::kEventAgentRegistered) {
+      if (!register_accepted) {
+        agent_sessions_.bind_agent(session_id, agent_mac, agent_id);
+        register_accepted = true;
+      }
       conn->send(
           ws::bus_event(
               item.type,

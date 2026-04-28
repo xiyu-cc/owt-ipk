@@ -25,6 +25,7 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -72,6 +73,28 @@ public:
     }
     if (callbacks.on_message) {
       callbacks.on_message(message);
+    }
+  }
+
+  void emit_connected() {
+    control::channel_callbacks callbacks;
+    {
+      std::lock_guard<std::mutex> lk(mutex_);
+      callbacks = callbacks_;
+    }
+    if (callbacks.on_connected) {
+      callbacks.on_connected();
+    }
+  }
+
+  void emit_disconnected() {
+    control::channel_callbacks callbacks;
+    {
+      std::lock_guard<std::mutex> lk(mutex_);
+      callbacks = callbacks_;
+    }
+    if (callbacks.on_disconnected) {
+      callbacks.on_disconnected();
     }
   }
 
@@ -353,6 +376,22 @@ control::envelope make_heartbeat_envelope(
   return out;
 }
 
+control::envelope make_register_ack_envelope(
+    const std::string& request_id,
+    bool ok,
+    std::string message,
+    int64_t now_ms) {
+  control::envelope out;
+  out.type = control::message_type::server_register_ack;
+  out.version = control::current_protocol_version();
+  out.id = request_id;
+  out.ts_ms = now_ms;
+  out.payload = control::register_ack_payload{
+      ok,
+      std::move(message)};
+  return out;
+}
+
 void test_ack_running_result_sequence() {
   auto channel = std::make_unique<fake_control_channel>();
   auto* raw_channel = channel.get();
@@ -622,6 +661,7 @@ void test_config_parser_rejects_trailing_numeric_garbage() {
     std::ofstream out(path);
     out << "[agent]\n";
     out << "heartbeat_interval_ms = 6000x\n";
+    out << "register_retry_interval_ms = 1000ms\n";
     out << "status_collect_interval_ms = 1200ms\n";
     out << "ws_event_workers = 4foo\n";
     out << "ws_event_queue_capacity = 8192bar\n";
@@ -631,9 +671,106 @@ void test_config_parser_rejects_trailing_numeric_garbage() {
   std::filesystem::remove(path);
 
   require(cfg.agent.heartbeat_interval_ms == 5000, "invalid heartbeat should keep default");
+  require(cfg.agent.register_retry_interval_ms == 1000, "invalid register retry interval should keep default");
   require(cfg.agent.status_collect_interval_ms == 1000, "invalid collect interval should keep default");
   require(cfg.agent.ws_event_workers == 2, "invalid workers should keep default");
   require(cfg.agent.ws_event_queue_capacity == 4096, "invalid queue capacity should keep default");
+}
+
+void test_config_parser_register_retry_interval_bounds() {
+  auto write_and_load = [](const std::string& value) {
+    const auto unique = std::to_string(control::unix_time_ms_now()) + "-" + value;
+    const auto path = std::filesystem::path("/tmp") / ("owt-agent-config-retry-" + unique + ".ini");
+    {
+      std::ofstream out(path);
+      out << "[agent]\n";
+      out << "register_retry_interval_ms = " << value << "\n";
+    }
+    const auto cfg = owt_agent::load_config(path.string());
+    std::filesystem::remove(path);
+    return cfg;
+  };
+
+  require(
+      write_and_load("50").agent.register_retry_interval_ms == 200,
+      "register retry interval should clamp to min");
+  require(
+      write_and_load("70000").agent.register_retry_interval_ms == 60000,
+      "register retry interval should clamp to max");
+  require(
+      write_and_load("2500").agent.register_retry_interval_ms == 2500,
+      "register retry interval should keep valid value");
+}
+
+void test_register_retry_until_ack() {
+  auto channel = std::make_unique<fake_control_channel>();
+  auto* raw_channel = channel.get();
+
+  control::agent_runtime runtime(std::move(channel));
+  control::agent_runtime_options options;
+  options.agent_id = "agent-register-retry";
+  options.agent_mac = "AA:00:00:00:00:31";
+  options.wss_endpoint = "ws://test/ws/v5/agent";
+  options.ws_event_workers = 1;
+  options.register_retry_interval_ms = 200;
+
+  require(runtime.start(options), "runtime start failed (register retry)");
+
+  raw_channel->emit_connected();
+  require(
+      wait_until(
+          [raw_channel]() {
+            auto sent = raw_channel->sent_messages();
+            int register_count = 0;
+            for (const auto& msg : sent) {
+              if (msg.type == control::message_type::agent_register) {
+                ++register_count;
+              }
+            }
+            return register_count >= 2;
+          },
+          2000),
+      "register should retry before ack");
+
+  raw_channel->emit_message(make_register_ack_envelope("req-register-ack", true, "ok", control::unix_time_ms_now()));
+  const auto sent_after_ack = raw_channel->sent_messages();
+  int register_count_after_ack = 0;
+  for (const auto& msg : sent_after_ack) {
+    if (msg.type == control::message_type::agent_register) {
+      ++register_count_after_ack;
+    }
+  }
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(450));
+  const auto stable_after_ack = raw_channel->sent_messages();
+  int stable_register_count = 0;
+  for (const auto& msg : stable_after_ack) {
+    if (msg.type == control::message_type::agent_register) {
+      ++stable_register_count;
+    }
+  }
+  require(
+      stable_register_count == register_count_after_ack,
+      "register retry should stop after ack");
+
+  raw_channel->emit_disconnected();
+  raw_channel->emit_connected();
+  require(
+      wait_until(
+          [raw_channel, stable_register_count]() {
+            auto sent = raw_channel->sent_messages();
+            int register_count = 0;
+            for (const auto& msg : sent) {
+              if (msg.type == control::message_type::agent_register) {
+                ++register_count;
+              }
+            }
+            return register_count > stable_register_count;
+          },
+          2000),
+      "register should retry again after reconnect");
+
+  runtime.stop();
 }
 
 void test_wss_reconnect_reliable_outbound_queue() {
@@ -732,6 +869,8 @@ int main() {
     test_dispatch_target_mismatch_is_ignored();
     test_apply_control_params_patch_rejects_unknown_fields();
     test_config_parser_rejects_trailing_numeric_garbage();
+    test_config_parser_register_retry_interval_bounds();
+    test_register_retry_until_ack();
     test_wss_reconnect_reliable_outbound_queue();
     log::shutdown();
     std::cout << "owt-agent runtime tests passed\n";

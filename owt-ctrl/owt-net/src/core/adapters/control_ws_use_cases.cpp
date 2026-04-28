@@ -69,10 +69,51 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
             }});
         return;
       }
+
+      bool duplicate_register = false;
       {
         std::lock_guard<std::mutex> lk(mutex_);
-        session_agents_[in.session_token] = in.agent_mac;
+        auto& bound_agent_mac = session_agents_[in.session_token];
+        if (!bound_agent_mac.empty() && bound_agent_mac != in.agent_mac) {
+          out.push_back(WsOutboundMessage{
+              in.session_token,
+              std::string(owt::protocol::v5::agent::kErrorServerError),
+              in.trace_id,
+              in.agent_id,
+              nlohmann::json{
+                  {"code", std::string(owt::protocol::v5::error_code::kInvalidParams)},
+                  {"message", "session already bound to another agent_mac"},
+                  {"detail",
+                   {
+                       {"registered_agent_mac", bound_agent_mac},
+                       {"payload_agent_mac", in.agent_mac},
+                   }},
+              }});
+          return;
+        }
+        duplicate_register = (!bound_agent_mac.empty() && bound_agent_mac == in.agent_mac);
+        if (!duplicate_register) {
+          bound_agent_mac = in.agent_mac;
+        }
       }
+
+      if (duplicate_register) {
+        log::info(
+            "agent register idempotent: agent_mac={}, agent_id={}, session_token={}, trace_id={}",
+            in.agent_mac,
+            in.agent_id.empty() ? in.agent_mac : in.agent_id,
+            in.session_token,
+            in.trace_id);
+        out.push_back(WsOutboundMessage{
+            in.session_token,
+            std::string(owt::protocol::v5::agent::kEventAgentRegistered),
+            in.trace_id,
+            in.agent_id,
+            nlohmann::json{{"ok", true}, {"message", "already registered"}},
+        });
+        return;
+      }
+
       std::string bind_error;
       if (!registry_.bind_session(in.agent_mac, in.session_token, &bind_error)) {
         log::warn(

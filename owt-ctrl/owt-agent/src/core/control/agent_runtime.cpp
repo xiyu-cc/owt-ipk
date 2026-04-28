@@ -5,9 +5,11 @@
 #include "log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace control {
@@ -16,6 +18,8 @@ namespace {
 
 constexpr const char* kDefaultSiteId = "default";
 constexpr const char* kAgentVersion = "0.2.0";
+constexpr int kMinRegisterRetryIntervalMs = 200;
+constexpr int kMaxRegisterRetryIntervalMs = 60000;
 
 int64_t default_now_ms() {
   return unix_time_ms_now();
@@ -99,6 +103,12 @@ bool agent_runtime::start(const agent_runtime_options& options) {
   }
 
   options_ = options;
+  options_.register_retry_interval_ms = std::clamp(
+      options_.register_retry_interval_ms,
+      kMinRegisterRetryIntervalMs,
+      kMaxRegisterRetryIntervalMs);
+  channel_connected_.store(false, std::memory_order_relaxed);
+  register_acked_.store(false, std::memory_order_relaxed);
   running_.store(true, std::memory_order_relaxed);
 
   runtime_event_dispatcher_options dispatcher_options;
@@ -144,6 +154,12 @@ bool agent_runtime::start(const agent_runtime_options& options) {
     return false;
   }
 
+  {
+    std::lock_guard<std::mutex> lk(register_retry_mutex_);
+    register_retry_stop_requested_ = false;
+  }
+  register_retry_thread_ = std::thread([this]() { run_register_retry_loop(); });
+
   log::info("agent runtime started");
   return true;
 }
@@ -152,6 +168,10 @@ void agent_runtime::stop() {
   if (!running_.exchange(false, std::memory_order_relaxed)) {
     return;
   }
+
+  stop_register_retry_loop();
+  channel_connected_.store(false, std::memory_order_relaxed);
+  register_acked_.store(false, std::memory_order_relaxed);
 
   if (control_channel_) {
     control_channel_->stop();
@@ -249,6 +269,8 @@ bool agent_runtime::send_command_ack(
 channel_callbacks agent_runtime::build_callbacks(const std::string& endpoint) {
   channel_callbacks callbacks;
   callbacks.on_connected = [this, endpoint]() {
+    channel_connected_.store(true, std::memory_order_relaxed);
+    register_acked_.store(false, std::memory_order_relaxed);
     const auto result = event_dispatcher_.post(
         "agent",
         runtime_event_priority::high,
@@ -264,6 +286,8 @@ channel_callbacks agent_runtime::build_callbacks(const std::string& endpoint) {
   };
 
   callbacks.on_disconnected = [this, endpoint]() {
+    channel_connected_.store(false, std::memory_order_relaxed);
+    register_acked_.store(false, std::memory_order_relaxed);
     const auto result = event_dispatcher_.post(
         "agent",
         runtime_event_priority::high,
@@ -384,6 +408,15 @@ void agent_runtime::handle_channel_message(const envelope& message) {
                 "control channel message ignored: unsupported protocol={}, local_version={}",
                 remote_version,
                 current_protocol_version());
+          },
+          .on_register_ack = [this](const register_ack_payload& payload) {
+            if (payload.ok) {
+              register_acked_.store(true, std::memory_order_relaxed);
+              log::info("agent register acknowledged: message={}", payload.message);
+              return;
+            }
+            register_acked_.store(false, std::memory_order_relaxed);
+            log::warn("agent register rejected: message={}", payload.message);
           },
           .on_server_error = [](const error_payload& payload) {
             log::error(
@@ -527,6 +560,62 @@ bool agent_runtime::send_command_result(
 
 void agent_runtime::enqueue_command(const nlohmann::json& request_id, const command& cmd) {
   execution_worker_.enqueue(request_id, cmd);
+}
+
+void agent_runtime::run_register_retry_loop() {
+  const auto retry_interval = std::chrono::milliseconds(std::clamp(
+      options_.register_retry_interval_ms,
+      kMinRegisterRetryIntervalMs,
+      kMaxRegisterRetryIntervalMs));
+  std::unique_lock<std::mutex> lk(register_retry_mutex_);
+  while (!register_retry_stop_requested_) {
+    if (register_retry_cv_.wait_for(
+            lk,
+            retry_interval,
+            [this]() { return register_retry_stop_requested_; })) {
+      break;
+    }
+
+    lk.unlock();
+    const bool should_retry =
+        running_.load(std::memory_order_relaxed) &&
+        channel_connected_.load(std::memory_order_relaxed) &&
+        !register_acked_.load(std::memory_order_relaxed);
+    if (should_retry) {
+      const auto result = event_dispatcher_.post(
+          "agent",
+          runtime_event_priority::high,
+          [this]() {
+            if (!running_.load(std::memory_order_relaxed)) {
+              return;
+            }
+            if (!channel_connected_.load(std::memory_order_relaxed)) {
+              return;
+            }
+            if (register_acked_.load(std::memory_order_relaxed)) {
+              return;
+            }
+            if (!send_register()) {
+              log::warn("register retry send failed");
+            }
+          });
+      if (result != runtime_event_post_result::accepted) {
+        log::warn("register retry enqueue failed: reason={}", static_cast<int>(result));
+      }
+    }
+    lk.lock();
+  }
+}
+
+void agent_runtime::stop_register_retry_loop() {
+  {
+    std::lock_guard<std::mutex> lk(register_retry_mutex_);
+    register_retry_stop_requested_ = true;
+  }
+  register_retry_cv_.notify_all();
+  if (register_retry_thread_.joinable()) {
+    register_retry_thread_.join();
+  }
 }
 
 } // namespace control

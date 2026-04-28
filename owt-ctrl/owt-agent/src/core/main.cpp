@@ -151,6 +151,7 @@ int main(int argc, char* argv[]) {
   options.wss_endpoint = cfg.agent.wss_endpoint;
   options.ws_event_workers = cfg.agent.ws_event_workers;
   options.ws_event_queue_capacity = cfg.agent.ws_event_queue_capacity;
+  options.register_retry_interval_ms = cfg.agent.register_retry_interval_ms;
   if (options.agent_mac.empty()) {
     log::error("agent runtime start failed: cannot resolve agent_mac");
     log::shutdown();
@@ -162,8 +163,9 @@ int main(int argc, char* argv[]) {
   const int status_collect_interval_ms =
       std::clamp(cfg.agent.status_collect_interval_ms, 200, 60000);
   log::info(
-      "runtime intervals: heartbeat_interval_ms={}, status_collect_interval_ms={}, ws_event_workers={}, ws_event_queue_capacity={}",
+      "runtime intervals: heartbeat_interval_ms={}, register_retry_interval_ms={}, status_collect_interval_ms={}, ws_event_workers={}, ws_event_queue_capacity={}",
       heartbeat_interval_ms,
+      options.register_retry_interval_ms,
       status_collect_interval_ms,
       options.ws_event_workers,
       options.ws_event_queue_capacity);

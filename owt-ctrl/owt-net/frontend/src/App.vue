@@ -459,12 +459,17 @@ const offCommand = bus.on(COMMAND_BUS_EVENTS.COMMAND_EVENT, (params) => {
 })
 
 watch(
-  () => selectedAgentMac.value,
-  async (next) => {
-    if (!next || !bus.connected.value) return
-    latestResult.value = null
+  [() => selectedAgentMac.value, () => bus.connected.value],
+  async ([nextAgentMac, connected], [prevAgentMac, prevConnected]) => {
+    if (!nextAgentMac || !connected) return
+    if (nextAgentMac !== prevAgentMac) {
+      latestResult.value = null
+    }
+    if (nextAgentMac === prevAgentMac && prevConnected === connected) {
+      return
+    }
     try {
-      await bus.call(COMMAND_BUS_ACTIONS.SESSION_SUBSCRIBE, { scope: 'agent', agent_mac: next })
+      await bus.call(COMMAND_BUS_ACTIONS.SESSION_SUBSCRIBE, { scope: 'agent', agent_mac: nextAgentMac })
     } catch (_) {
       // ignore
     }

@@ -29,6 +29,20 @@ void agent_runtime_message_router::route(const envelope& message, const handlers
     return;
   }
 
+  if (message.type == message_type::server_register_ack) {
+    const auto* payload = std::get_if<register_ack_payload>(&message.payload);
+    if (payload == nullptr) {
+      if (handlers.on_invalid_message) {
+        handlers.on_invalid_message("agent.registered payload missing");
+      }
+      return;
+    }
+    if (handlers.on_register_ack) {
+      handlers.on_register_ack(*payload);
+    }
+    return;
+  }
+
   if (message.type != message_type::server_command_dispatch) {
     return;
   }

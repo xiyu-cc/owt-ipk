@@ -68,6 +68,11 @@ Config load_config(const std::string& path) {
         if (parse_int_strict(value, parsed)) {
           cfg.agent.heartbeat_interval_ms = std::clamp(parsed, 1000, 120000);
         }
+      } else if (key == "register_retry_interval_ms") {
+        int parsed = 0;
+        if (parse_int_strict(value, parsed)) {
+          cfg.agent.register_retry_interval_ms = std::clamp(parsed, 200, 60000);
+        }
       } else if (key == "status_collect_interval_ms") {
         int parsed = 0;
         if (parse_int_strict(value, parsed)) {

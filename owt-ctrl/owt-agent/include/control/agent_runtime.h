@@ -8,12 +8,14 @@
 #include "control/runtime_event_dispatcher.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 
 namespace control {
@@ -26,6 +28,7 @@ struct agent_runtime_options {
   std::string wss_endpoint = "wss://owt.wzhex.com/ws/v5/agent";
   int ws_event_workers = 2;
   int ws_event_queue_capacity = 4096;
+  int register_retry_interval_ms = 1000;
 };
 
 class agent_runtime {
@@ -85,6 +88,8 @@ private:
       int exit_code,
       const nlohmann::json& result);
   void enqueue_command(const nlohmann::json& request_id, const command& cmd);
+  void run_register_retry_loop();
+  void stop_register_retry_loop();
 
 private:
   std::unique_ptr<i_control_channel> control_channel_;
@@ -100,6 +105,12 @@ private:
   now_ms_provider now_ms_fn_{};
   std::size_t seen_command_cache_max_size_ = kDefaultSeenCommandCacheMaxSize;
   int64_t seen_command_cache_ttl_ms_ = kDefaultSeenCommandCacheTtlMs;
+  std::atomic<bool> channel_connected_{false};
+  std::atomic<bool> register_acked_{false};
+  std::mutex register_retry_mutex_;
+  std::condition_variable register_retry_cv_;
+  bool register_retry_stop_requested_ = false;
+  std::thread register_retry_thread_;
 
   runtime_event_dispatcher event_dispatcher_;
   agent_runtime_execution_worker execution_worker_;

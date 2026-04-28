@@ -1686,6 +1686,240 @@ void test_control_ws_use_cases_v5_contract() {
       "ws close should set agent offline");
 }
 
+void test_control_ws_use_cases_register_close_reregister_restores_online() {
+  test_clock clock;
+  clock.set(6000);
+  in_memory_command_repository command_repo;
+  in_memory_agent_repository agent_repo;
+  fake_status_publisher publisher;
+  fake_metrics metrics;
+
+  ctrl::application::AgentRegistryService registry(agent_repo, clock);
+  ctrl::application::AgentMessageService message_service(
+      command_repo,
+      registry,
+      publisher,
+      metrics,
+      clock);
+  ctrl::adapters::ControlWsUseCases ws_use_cases(registry, message_service);
+
+  std::vector<ctrl::adapters::WsOutboundMessage> ws_out;
+  ws_use_cases.on_open("sess-re-register-1");
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-re-register-1",
+          ctrl::adapters::WsMessageKind::Register,
+          "trc-re-register-1",
+          "AA:00:00:00:51:01",
+          "agent-51-01",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json::object()},
+      ws_out);
+  require(ws_out.size() == 1, "first register should succeed");
+  ws_use_cases.on_close("sess-re-register-1");
+
+  ctrl::domain::AgentState agent;
+  require(
+      registry.get_agent("AA:00:00:00:51:01", agent) && !agent.online,
+      "agent should be offline after first session close");
+
+  ws_out.clear();
+  ws_use_cases.on_open("sess-re-register-2");
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-re-register-2",
+          ctrl::adapters::WsMessageKind::Register,
+          "trc-re-register-2",
+          "AA:00:00:00:51:01",
+          "agent-51-01",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json::object()},
+      ws_out);
+  require(ws_out.size() == 1, "second register should succeed");
+  require(
+      registry.get_agent("AA:00:00:00:51:01", agent) && agent.online,
+      "agent should restore online after re-register");
+}
+
+void test_control_ws_use_cases_duplicate_register_same_session_idempotent() {
+  test_clock clock;
+  clock.set(6100);
+  in_memory_command_repository command_repo;
+  in_memory_agent_repository agent_repo;
+  fake_status_publisher publisher;
+  fake_metrics metrics;
+
+  ctrl::application::AgentRegistryService registry(agent_repo, clock);
+  ctrl::application::AgentMessageService message_service(
+      command_repo,
+      registry,
+      publisher,
+      metrics,
+      clock);
+  ctrl::adapters::ControlWsUseCases ws_use_cases(registry, message_service);
+
+  ws_use_cases.on_open("sess-idempotent");
+  std::vector<ctrl::adapters::WsOutboundMessage> ws_out;
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-idempotent",
+          ctrl::adapters::WsMessageKind::Register,
+          "trc-idempotent-1",
+          "AA:00:00:00:52:01",
+          "agent-52-01",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json::object()},
+      ws_out);
+  require(ws_out.size() == 1, "first register should return one reply");
+  require(
+      ws_out.front().type == owt::protocol::v5::agent::kEventAgentRegistered,
+      "first register should return agent.registered");
+  require(publisher.agents_.size() == 1, "first register should publish one agent update");
+  require(publisher.snapshots_.size() == 1, "first register should publish one snapshot update");
+
+  ws_out.clear();
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-idempotent",
+          ctrl::adapters::WsMessageKind::Register,
+          "trc-idempotent-2",
+          "AA:00:00:00:52:01",
+          "agent-52-01",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json::object()},
+      ws_out);
+  require(ws_out.size() == 1, "duplicate register should still return one reply");
+  require(
+      ws_out.front().type == owt::protocol::v5::agent::kEventAgentRegistered,
+      "duplicate register should return agent.registered");
+  require(
+      publisher.agents_.size() == 1,
+      "duplicate register should not publish extra agent updates");
+  require(
+      publisher.snapshots_.size() == 1,
+      "duplicate register should not publish extra snapshot updates");
+
+  ctrl::domain::AgentState agent;
+  require(
+      registry.get_agent("AA:00:00:00:52:01", agent) && agent.online,
+      "duplicate register should keep agent online");
+}
+
+void test_control_ws_use_cases_register_agent_switch_same_session_rejected() {
+  test_clock clock;
+  clock.set(6200);
+  in_memory_command_repository command_repo;
+  in_memory_agent_repository agent_repo;
+  fake_status_publisher publisher;
+  fake_metrics metrics;
+
+  ctrl::application::AgentRegistryService registry(agent_repo, clock);
+  ctrl::application::AgentMessageService message_service(
+      command_repo,
+      registry,
+      publisher,
+      metrics,
+      clock);
+  ctrl::adapters::ControlWsUseCases ws_use_cases(registry, message_service);
+
+  ws_use_cases.on_open("sess-switch");
+  std::vector<ctrl::adapters::WsOutboundMessage> ws_out;
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-switch",
+          ctrl::adapters::WsMessageKind::Register,
+          "trc-switch-1",
+          "AA:00:00:00:53:01",
+          "agent-53-01",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json::object()},
+      ws_out);
+  require(ws_out.size() == 1, "first register should succeed");
+
+  ws_out.clear();
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-switch",
+          ctrl::adapters::WsMessageKind::Register,
+          "trc-switch-2",
+          "AA:00:00:00:53:02",
+          "agent-53-02",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json::object()},
+      ws_out);
+  require(ws_out.size() == 1, "switch register should return one error");
+  require(
+      ws_out.front().type == owt::protocol::v5::agent::kErrorServerError,
+      "switch register should return server.error");
+  require(
+      ws_out.front().payload.value("code", std::string{}) ==
+          owt::protocol::v5::error_code::kInvalidParams,
+      "switch register should return invalid_params");
+
+  ctrl::domain::AgentState agent_a;
+  require(
+      registry.get_agent("AA:00:00:00:53:01", agent_a) && agent_a.online,
+      "original agent should remain online");
+  ctrl::domain::AgentState agent_b;
+  require(
+      !registry.get_agent("AA:00:00:00:53:02", agent_b),
+      "new agent should not be registered");
+
+  ws_use_cases.on_text(
+      ctrl::adapters::WsInboundMessage{
+          "sess-switch",
+          ctrl::adapters::WsMessageKind::Heartbeat,
+          "trc-switch-heartbeat-ok",
+          "AA:00:00:00:53:01",
+          "agent-53-01",
+          ctrl::domain::CommandState::Created,
+          "",
+          0,
+          nlohmann::json{
+              {"agent_mac", "AA:00:00:00:53:01"},
+              {"heartbeat_at_ms", 6201},
+              {"stats", nlohmann::json::object()},
+          }},
+      ws_out);
+
+  bool mismatch_rejected = false;
+  try {
+    ws_use_cases.on_text(
+        ctrl::adapters::WsInboundMessage{
+            "sess-switch",
+            ctrl::adapters::WsMessageKind::Heartbeat,
+            "trc-switch-heartbeat-bad",
+            "AA:00:00:00:53:02",
+            "agent-53-02",
+            ctrl::domain::CommandState::Created,
+            "",
+            0,
+            nlohmann::json{
+                {"agent_mac", "AA:00:00:00:53:02"},
+                {"heartbeat_at_ms", 6202},
+                {"stats", nlohmann::json::object()},
+            }},
+        ws_out);
+  } catch (const std::invalid_argument& ex) {
+    mismatch_rejected = std::string(ex.what()) == "payload.agent_mac does not match registered session agent";
+  }
+  require(
+      mismatch_rejected,
+      "session binding should remain unchanged after rejected register switch");
+}
+
 struct agent_action_gateway_fixture {
   test_clock clock;
   in_memory_command_repository command_repo;
@@ -2542,6 +2776,9 @@ int main() {
     test_params_rate_limiter_redaction();
     test_presenter_command_redaction();
     test_control_ws_use_cases_v5_contract();
+    test_control_ws_use_cases_register_close_reregister_restores_online();
+    test_control_ws_use_cases_duplicate_register_same_session_idempotent();
+    test_control_ws_use_cases_register_agent_switch_same_session_rejected();
     test_action_envelope_validator_rejects_target_for_action();
     test_agent_action_gateway_requires_payload_agent_mac_for_strict_actions();
     test_agent_action_gateway_requires_register_before_strict_actions();

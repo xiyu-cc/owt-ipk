@@ -130,8 +130,8 @@ function updateSshField(key, value) {
     </article>
 
     <div class="row params-actions">
-      <button class="ghost" type="button" :disabled="props.busy" @click="emit('load')">从 Agent 读取</button>
-      <button type="button" :disabled="props.busy" @click="emit('save')">保存并下发</button>
+      <button class="ghost" type="button" :disabled="props.busy" @click="emit('load')">读取</button>
+      <button type="button" :disabled="props.busy" @click="emit('save')">保存</button>
     </div>
   </div>
 </template>
