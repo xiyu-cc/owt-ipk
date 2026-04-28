@@ -5,14 +5,13 @@
 #include "config.h"
 #include "log.h"
 
-#include <drogon/WebSocketController.h>
-#include <drogon/drogon.h>
-#include <trantor/utils/Logger.h>
+#include <libwebsockets.h>
 
 #include <arpa/inet.h>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -23,7 +22,9 @@
 #include <stdexcept>
 #include <string>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <thread>
+#include <unordered_map>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -116,53 +117,87 @@ public:
   static void reset() {
     std::lock_guard<std::mutex> lk(mutex_);
     messages_.clear();
-    connection_.reset();
+    fragments_.clear();
+    connection_ = nullptr;
+    close_requested_ = false;
     connections_opened_ = 0;
     connections_closed_ = 0;
   }
 
-  static void on_connection_open(const drogon::WebSocketConnectionPtr& conn) {
+  static void bind_context(struct lws_context* ctx) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    context_ = ctx;
+  }
+
+  static void on_connection_open(struct lws* conn) {
     {
       std::lock_guard<std::mutex> lk(mutex_);
       connection_ = conn;
+      fragments_.erase(conn);
       ++connections_opened_;
     }
     cv_.notify_all();
   }
 
-  static void on_connection_closed(const drogon::WebSocketConnectionPtr& conn) {
+  static void on_connection_closed(struct lws* conn) {
     {
       std::lock_guard<std::mutex> lk(mutex_);
-      if (connection_ && connection_.get() == conn.get()) {
-        connection_.reset();
+      if (connection_ == conn) {
+        connection_ = nullptr;
       }
+      fragments_.erase(conn);
       ++connections_closed_;
     }
     cv_.notify_all();
   }
 
-  static void on_message(std::string&& text, const drogon::WebSocketMessageType& type) {
-    if (type != drogon::WebSocketMessageType::Text) {
+  static void on_message_fragment(
+      struct lws* conn,
+      const char* data,
+      size_t len,
+      bool final_fragment,
+      bool has_remaining_payload,
+      bool is_binary) {
+    if (is_binary) {
       return;
     }
     {
       std::lock_guard<std::mutex> lk(mutex_);
-      messages_.push_back(std::move(text));
+      auto& acc = fragments_[conn];
+      if (data != nullptr && len > 0) {
+        acc.append(data, len);
+      }
+      if (!final_fragment || has_remaining_payload) {
+        return;
+      }
+      messages_.push_back(acc);
+      acc.clear();
     }
     cv_.notify_all();
   }
 
   static bool close_active_connection() {
-    drogon::WebSocketConnectionPtr conn;
+    struct lws_context* ctx = nullptr;
+    bool has_connection = false;
     {
       std::lock_guard<std::mutex> lk(mutex_);
-      conn = connection_;
+      has_connection = (connection_ != nullptr);
+      close_requested_ = has_connection;
+      ctx = context_;
     }
-    if (!conn || !conn->connected()) {
-      return false;
+    if (ctx != nullptr) {
+      lws_cancel_service(ctx);
     }
-    conn->shutdown();
-    return true;
+    return has_connection;
+  }
+
+  static struct lws* take_close_target() {
+    std::lock_guard<std::mutex> lk(mutex_);
+    if (!close_requested_ || connection_ == nullptr) {
+      return nullptr;
+    }
+    close_requested_ = false;
+    return connection_;
   }
 
   static std::vector<std::string> messages_snapshot() {
@@ -187,7 +222,10 @@ private:
   static std::mutex mutex_;
   static std::condition_variable cv_;
   static std::vector<std::string> messages_;
-  static drogon::WebSocketConnectionPtr connection_;
+  static std::unordered_map<struct lws*, std::string> fragments_;
+  static struct lws* connection_;
+  static struct lws_context* context_;
+  static bool close_requested_;
   static int connections_opened_;
   static int connections_closed_;
 };
@@ -195,51 +233,107 @@ private:
 std::mutex reconnect_ws_probe::mutex_;
 std::condition_variable reconnect_ws_probe::cv_;
 std::vector<std::string> reconnect_ws_probe::messages_;
-drogon::WebSocketConnectionPtr reconnect_ws_probe::connection_;
+std::unordered_map<struct lws*, std::string> reconnect_ws_probe::fragments_;
+struct lws* reconnect_ws_probe::connection_ = nullptr;
+struct lws_context* reconnect_ws_probe::context_ = nullptr;
+bool reconnect_ws_probe::close_requested_ = false;
 int reconnect_ws_probe::connections_opened_ = 0;
 int reconnect_ws_probe::connections_closed_ = 0;
 
-class reconnect_ws_controller final : public drogon::WebSocketController<reconnect_ws_controller> {
+class scoped_lws_ws_server {
 public:
-  void handleNewMessage(
-      const drogon::WebSocketConnectionPtr&,
-      std::string&& message,
-      const drogon::WebSocketMessageType& type) override {
-    reconnect_ws_probe::on_message(std::move(message), type);
+  explicit scoped_lws_ws_server(int port) {
+    lws_set_log_level(LLL_ERR, nullptr);
+
+    lws_context_creation_info info{};
+    info.port = port;
+    info.protocols = protocols();
+    info.gid = static_cast<gid_t>(-1);
+    info.uid = static_cast<uid_t>(-1);
+    info.options = LWS_SERVER_OPTION_VALIDATE_UTF8;
+
+    context_ = lws_create_context(&info);
+    if (context_ == nullptr) {
+      throw std::runtime_error("failed to create libwebsockets test server");
+    }
+
+    reconnect_ws_probe::bind_context(context_);
+    thread_ = std::thread([this]() { run(); });
   }
 
-  void handleNewConnection(
-      const drogon::HttpRequestPtr&,
-      const drogon::WebSocketConnectionPtr& conn) override {
-    reconnect_ws_probe::on_connection_open(conn);
-  }
-
-  void handleConnectionClosed(const drogon::WebSocketConnectionPtr& conn) override {
-    reconnect_ws_probe::on_connection_closed(conn);
-  }
-
-  WS_PATH_LIST_BEGIN
-  WS_PATH_ADD("/ws-test/v5/agent", drogon::Get);
-  WS_PATH_LIST_END
-};
-
-class scoped_drogon_ws_server {
-public:
-  explicit scoped_drogon_ws_server(int port) {
-    drogon::app().setLogLevel(trantor::Logger::kWarn);
-    drogon::app().setThreadNum(1);
-    drogon::app().addListener("127.0.0.1", static_cast<uint16_t>(port));
-    thread_ = std::thread([]() { drogon::app().run(); });
-  }
-
-  ~scoped_drogon_ws_server() {
-    drogon::app().quit();
+  ~scoped_lws_ws_server() {
+    stop_requested_.store(true, std::memory_order_relaxed);
+    if (context_ != nullptr) {
+      lws_cancel_service(context_);
+    }
     if (thread_.joinable()) {
       thread_.join();
+    }
+    reconnect_ws_probe::bind_context(nullptr);
+    if (context_ != nullptr) {
+      lws_context_destroy(context_);
+      context_ = nullptr;
     }
   }
 
 private:
+  static int callback(
+      struct lws* wsi,
+      enum lws_callback_reasons reason,
+      void*,
+      void* in,
+      size_t len) {
+    switch (reason) {
+      case LWS_CALLBACK_ESTABLISHED:
+        reconnect_ws_probe::on_connection_open(wsi);
+        break;
+      case LWS_CALLBACK_CLOSED:
+        reconnect_ws_probe::on_connection_closed(wsi);
+        break;
+      case LWS_CALLBACK_RECEIVE:
+        reconnect_ws_probe::on_message_fragment(
+            wsi,
+            static_cast<const char*>(in),
+            len,
+            lws_is_final_fragment(wsi) != 0,
+            lws_remaining_packet_payload(wsi) != 0,
+            lws_frame_is_binary(wsi) != 0);
+        break;
+      case LWS_CALLBACK_EVENT_WAIT_CANCELLED: {
+        struct lws* target = reconnect_ws_probe::take_close_target();
+        if (target != nullptr) {
+          lws_wsi_close(target, LWS_TO_KILL_ASYNC);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    return 0;
+  }
+
+  static const lws_protocols* protocols() {
+    static const lws_protocols kProtocols[] = {
+        {"owt-agent-control", &scoped_lws_ws_server::callback, 0, 0, 0, nullptr, 0},
+        LWS_PROTOCOL_LIST_TERM,
+    };
+    return kProtocols;
+  }
+
+  void run() {
+    while (!stop_requested_.load(std::memory_order_relaxed)) {
+      if (auto* target = reconnect_ws_probe::take_close_target(); target != nullptr) {
+        lws_wsi_close(target, LWS_TO_KILL_ASYNC);
+      }
+      if (lws_service(context_, 100) < 0) {
+        break;
+      }
+    }
+  }
+
+private:
+  struct lws_context* context_ = nullptr;
+  std::atomic<bool> stop_requested_{false};
   std::thread thread_;
 };
 
@@ -773,10 +867,134 @@ void test_register_retry_until_ack() {
   runtime.stop();
 }
 
+void test_wss_start_rejects_empty_endpoint() {
+  control::wss_control_channel channel;
+  std::vector<std::string> errors;
+  std::mutex errors_mutex;
+
+  control::channel_callbacks callbacks;
+  callbacks.on_error = [&errors, &errors_mutex](const std::string& err) {
+    std::lock_guard<std::mutex> lk(errors_mutex);
+    errors.push_back(err);
+  };
+
+  control::channel_start_options options;
+  options.agent_id = "agent-empty-endpoint";
+  options.endpoint = "";
+  options.protocol_version = control::current_protocol_version();
+
+  require(!channel.start(options, std::move(callbacks)), "empty endpoint should fail fast");
+  require(!channel.is_running(), "channel should not be running for empty endpoint");
+  std::vector<std::string> errors_snapshot;
+  {
+    std::lock_guard<std::mutex> lk(errors_mutex);
+    errors_snapshot = errors;
+  }
+  require(!errors_snapshot.empty(), "empty endpoint should trigger on_error");
+  require(errors_snapshot.back() == "wss endpoint is empty", "empty endpoint error mismatch");
+}
+
+void test_wss_start_rejects_invalid_endpoint_authority() {
+  struct endpoint_case {
+    std::string endpoint;
+    std::string expected_error_fragment;
+  };
+
+  const std::vector<endpoint_case> cases = {
+      {"http://127.0.0.1/ws/v5/agent", "endpoint scheme must be ws or wss"},
+      {"ws://127.0.0.1:abc/ws/v5/agent", "endpoint port is not numeric"},
+      {"ws://:9000/ws/v5/agent", "endpoint host is empty"},
+      {"ws://2001:db8::1/ws/v5/agent", "endpoint IPv6 host must be bracketed"},
+      {"ws://[2001:db8::1/ws/v5/agent", "endpoint IPv6 host invalid"},
+      {"ws://[::1]:/ws/v5/agent", "endpoint port is empty"},
+  };
+
+  for (const auto& test_case : cases) {
+    control::wss_control_channel channel;
+    std::vector<std::string> errors;
+    std::mutex errors_mutex;
+
+    control::channel_callbacks callbacks;
+    callbacks.on_error = [&errors, &errors_mutex](const std::string& err) {
+      std::lock_guard<std::mutex> lk(errors_mutex);
+      errors.push_back(err);
+    };
+
+    control::channel_start_options options;
+    options.agent_id = "agent-invalid-endpoint";
+    options.endpoint = test_case.endpoint;
+    options.protocol_version = control::current_protocol_version();
+
+    require(!channel.start(options, std::move(callbacks)), "invalid endpoint should fail fast");
+    require(!channel.is_running(), "channel should not be running for invalid endpoint");
+    std::vector<std::string> errors_snapshot;
+    {
+      std::lock_guard<std::mutex> lk(errors_mutex);
+      errors_snapshot = errors;
+    }
+    require(!errors_snapshot.empty(), "invalid endpoint should trigger on_error");
+    require(
+        errors_snapshot.back().find(test_case.expected_error_fragment) != std::string::npos,
+        "invalid endpoint error detail mismatch");
+  }
+}
+
+void test_wss_send_stop_concurrency_stress() {
+  const int kPort = pick_free_tcp_port();
+  reconnect_ws_probe::reset();
+  scoped_lws_ws_server server(kPort);
+
+  control::wss_control_channel channel;
+  std::atomic<int> connected_count{0};
+
+  control::channel_callbacks callbacks;
+  callbacks.on_connected = [&connected_count]() { connected_count.fetch_add(1, std::memory_order_relaxed); };
+
+  control::channel_start_options options;
+  options.agent_id = "agent-send-stop-stress";
+  options.endpoint = "ws://127.0.0.1:" + std::to_string(kPort) + "/ws-test/v5/agent";
+  options.protocol_version = control::current_protocol_version();
+
+  require(channel.start(options, std::move(callbacks)), "stress channel start should succeed");
+  require(
+      wait_until([&connected_count]() { return connected_count.load(std::memory_order_relaxed) >= 1; }, 5000),
+      "stress channel should connect");
+
+  std::atomic<bool> stop_senders{false};
+  std::atomic<uint64_t> seq{0};
+  constexpr int kSenderThreads = 4;
+  std::vector<std::thread> senders;
+  senders.reserve(kSenderThreads);
+  for (int i = 0; i < kSenderThreads; ++i) {
+    senders.emplace_back([&stop_senders, &seq, &channel]() {
+      while (!stop_senders.load(std::memory_order_relaxed)) {
+        const auto id = seq.fetch_add(1, std::memory_order_relaxed);
+        (void)channel.send(make_ack_envelope(
+            "req-stress-" + std::to_string(id),
+            "AA:00:00:00:99:01",
+            "cmd-stress-" + std::to_string(id),
+            control::unix_time_ms_now()));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    });
+  }
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  channel.stop();
+  stop_senders.store(true, std::memory_order_relaxed);
+  for (auto& sender : senders) {
+    if (sender.joinable()) {
+      sender.join();
+    }
+  }
+
+  require(!channel.is_running(), "channel should be stopped after stress stop");
+}
+
 void test_wss_reconnect_reliable_outbound_queue() {
   const int kPort = pick_free_tcp_port();
   reconnect_ws_probe::reset();
-  scoped_drogon_ws_server server(kPort);
+  scoped_lws_ws_server server(kPort);
 
   control::wss_control_channel channel;
   std::atomic<int> connected_count{0};
@@ -871,6 +1089,9 @@ int main() {
     test_config_parser_rejects_trailing_numeric_garbage();
     test_config_parser_register_retry_interval_bounds();
     test_register_retry_until_ack();
+    test_wss_start_rejects_empty_endpoint();
+    test_wss_start_rejects_invalid_endpoint_authority();
+    test_wss_send_stop_concurrency_stress();
     test_wss_reconnect_reliable_outbound_queue();
     log::shutdown();
     std::cout << "owt-agent runtime tests passed\n";

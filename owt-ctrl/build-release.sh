@@ -29,7 +29,7 @@ if [[ -z "${OWT_AGENT_TP_SOURCE:-}" ]]; then
   echo "OWT_AGENT_TP_SOURCE is required (point it to the owt third_party directory)." >&2
   exit 4
 fi
-if [[ ! -d "${OWT_AGENT_TP_SOURCE}/spdlog" || ! -d "${OWT_AGENT_TP_SOURCE}/nlohmann" || ! -d "${OWT_AGENT_TP_SOURCE}/jsoncpp" || ! -d "${OWT_AGENT_TP_SOURCE}/drogon" ]]; then
+if [[ ! -d "${OWT_AGENT_TP_SOURCE}/spdlog" || ! -d "${OWT_AGENT_TP_SOURCE}/nlohmann" || ! -d "${OWT_AGENT_TP_SOURCE}/jsoncpp" ]]; then
   echo "OWT_AGENT_TP_SOURCE='${OWT_AGENT_TP_SOURCE}' is missing required third_party components." >&2
   exit 4
 fi

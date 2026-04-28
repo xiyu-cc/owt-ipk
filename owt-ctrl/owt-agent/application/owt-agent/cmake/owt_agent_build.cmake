@@ -5,6 +5,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(Threads REQUIRED)
 find_path(LIBSSH2_INCLUDE_DIR NAMES libssh2.h)
 find_library(LIBSSH2_LIBRARY NAMES ssh2 libssh2)
+find_path(LIBWEBSOCKETS_INCLUDE_DIR NAMES libwebsockets.h)
+find_library(LIBWEBSOCKETS_LIBRARY NAMES websockets libwebsockets)
 
 option(OWT_AGENT_REQUIRE_LIBSSH2 "Fail configure when libssh2 is unavailable" OFF)
 option(OWT_AGENT_ALLOW_SSH_STUB "Allow SSH stub build when libssh2 is unavailable" ON)
@@ -19,6 +21,9 @@ endif()
 if(NOT OWT_AGENT_HAS_LIBSSH2 AND NOT OWT_AGENT_ALLOW_SSH_STUB)
   message(FATAL_ERROR "libssh2 headers/libraries not found and OWT_AGENT_ALLOW_SSH_STUB=OFF")
 endif()
+if(NOT LIBWEBSOCKETS_INCLUDE_DIR OR NOT LIBWEBSOCKETS_LIBRARY)
+  message(FATAL_ERROR "libwebsockets headers/libraries were not found")
+endif()
 
 set(OWT_AGENT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 if(NOT DEFINED OWT_AGENT_TP_ROOT OR OWT_AGENT_TP_ROOT STREQUAL "")
@@ -29,8 +34,7 @@ if(NOT IS_ABSOLUTE "${OWT_AGENT_TP_ROOT}")
 endif()
 if(NOT EXISTS "${OWT_AGENT_TP_ROOT}/spdlog" OR
    NOT EXISTS "${OWT_AGENT_TP_ROOT}/nlohmann" OR
-   NOT EXISTS "${OWT_AGENT_TP_ROOT}/jsoncpp" OR
-   NOT EXISTS "${OWT_AGENT_TP_ROOT}/drogon")
+   NOT EXISTS "${OWT_AGENT_TP_ROOT}/jsoncpp")
   message(FATAL_ERROR "OWT_AGENT_TP_ROOT='${OWT_AGENT_TP_ROOT}' is missing required third_party components")
 endif()
 
@@ -52,15 +56,6 @@ set(JSONCPP_WITH_POST_BUILD_UNITTEST OFF)
 set(JSONCPP_WITH_PKGCONFIG_SUPPORT OFF)
 set(JSONCPP_WITH_CMAKE_PACKAGE OFF)
 
-set(BUILD_CTL OFF)
-set(BUILD_EXAMPLES OFF)
-set(BUILD_ORM OFF)
-set(BUILD_BROTLI OFF)
-set(BUILD_YAML_CONFIG OFF)
-set(USE_SUBMODULE ON)
-set(BUILD_SHARED_LIBS OFF)
-set(USE_STATIC_LIBS_ONLY ON)
-set(USE_SPDLOG OFF)
 set(BUILD_TESTING OFF)
 
 add_subdirectory("${OWT_AGENT_TP_ROOT}/spdlog" "${CMAKE_BINARY_DIR}/third_party/spdlog" EXCLUDE_FROM_ALL)
@@ -68,7 +63,6 @@ add_subdirectory("${OWT_AGENT_TP_ROOT}/nlohmann" "${CMAKE_BINARY_DIR}/third_part
 add_subdirectory("${OWT_AGENT_TP_ROOT}/jsoncpp" "${CMAKE_BINARY_DIR}/third_party/jsoncpp" EXCLUDE_FROM_ALL)
 set(JSONCPP_INCLUDE_DIRS "${OWT_AGENT_TP_ROOT}/jsoncpp/include")
 set(JSONCPP_LIBRARIES "jsoncpp_static")
-add_subdirectory("${OWT_AGENT_TP_ROOT}/drogon" "${CMAKE_BINARY_DIR}/third_party/drogon" EXCLUDE_FROM_ALL)
 
 set(BUILD_TESTING "${_OWT_AGENT_BUILD_TESTING_REQUESTED}")
 
@@ -118,6 +112,7 @@ function(owt_agent_apply_target_settings target_name)
       ${OWT_AGENT_ROOT}/src
       ${OWT_AGENT_ROOT}/src/core
       ${OWT_PROTOCOL_INCLUDE_DIR}
+      ${LIBWEBSOCKETS_INCLUDE_DIR}
   )
   if(OWT_AGENT_HAS_LIBSSH2)
     target_include_directories(${target_name} PRIVATE ${LIBSSH2_INCLUDE_DIR})
@@ -127,7 +122,7 @@ function(owt_agent_apply_target_settings target_name)
 
   target_link_libraries(${target_name}
     PRIVATE
-      Drogon::Drogon
+      ${LIBWEBSOCKETS_LIBRARY}
       spdlog::spdlog_header_only
       nlohmann_json::nlohmann_json
       Threads::Threads

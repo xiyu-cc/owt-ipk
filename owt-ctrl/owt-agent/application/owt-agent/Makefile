@@ -6,7 +6,7 @@ PKG_RELEASE:=1
 
 PKG_MAINTAINER:=owt-ipk
 PKG_LICENSE:=MIT
-PKG_BUILD_DEPENDS:=libssh2 libopenssl zlib libuuid cmake/host ninja/host
+PKG_BUILD_DEPENDS:=libssh2 libopenssl zlib libuuid libwebsockets-openssl cmake/host ninja/host
 
 include $(INCLUDE_DIR)/package.mk
 
@@ -22,7 +22,7 @@ define Package/$(PKG_NAME)
   SECTION:=utils
   CATEGORY:=Utilities
   TITLE:=OWT gateway execution agent
-  DEPENDS:=+libstdcpp +libssh2 +libopenssl +libuuid
+  DEPENDS:=+libstdcpp +libssh2 +libopenssl +libuuid +libwebsockets-openssl
 endef
 
 define Package/$(PKG_NAME)/description
@@ -40,7 +40,6 @@ define Build/Prepare
 	$(CP) $(OWT_AGENT_TP_SOURCE)/spdlog $(PKG_BUILD_DIR)/third_party/
 	$(CP) $(OWT_AGENT_TP_SOURCE)/nlohmann $(PKG_BUILD_DIR)/third_party/
 	$(CP) $(OWT_AGENT_TP_SOURCE)/jsoncpp $(PKG_BUILD_DIR)/third_party/
-	$(CP) $(OWT_AGENT_TP_SOURCE)/drogon $(PKG_BUILD_DIR)/third_party/
 	$(CP) ../../../owt-protocol/include $(PKG_BUILD_DIR)/owt-protocol/
 endef
 
@@ -61,6 +60,8 @@ define Build/Compile
 				-DOWT_AGENT_ALLOW_SSH_STUB=OFF \
 				-DLIBSSH2_INCLUDE_DIR="$(STAGING_DIR)/usr/include" \
 				-DLIBSSH2_LIBRARY="$(STAGING_DIR)/usr/lib/libssh2.so" \
+				-DLIBWEBSOCKETS_INCLUDE_DIR="$(STAGING_DIR)/usr/include" \
+				-DLIBWEBSOCKETS_LIBRARY="$(STAGING_DIR)/usr/lib/libwebsockets.so" \
 				-DOWT_AGENT_TP_ROOT="$(PKG_BUILD_DIR)/third_party" \
 				-DUUID_DIR="$(STAGING_DIR)/usr" \
 				-DUUID_INCLUDE_DIR="$(STAGING_DIR)/usr/include/uuid" \
