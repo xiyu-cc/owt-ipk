@@ -28,28 +28,6 @@ bool try_parse_state_text_or_error(
   return true;
 }
 
-bool is_allowed_non_terminal_transition(
-    domain::CommandState current_state,
-    domain::CommandState next_state) {
-  if (next_state == domain::CommandState::Dispatched) {
-    return current_state == domain::CommandState::RetryPending;
-  }
-  if (next_state == domain::CommandState::Acked) {
-    return current_state == domain::CommandState::Dispatched;
-  }
-  if (next_state == domain::CommandState::Running) {
-    return current_state == domain::CommandState::Acked;
-  }
-  return false;
-}
-
-bool is_allowed_terminal_transition(domain::CommandState current_state) {
-  return current_state == domain::CommandState::Dispatched ||
-      current_state == domain::CommandState::Acked ||
-      current_state == domain::CommandState::Running ||
-      current_state == domain::CommandState::RetryPending;
-}
-
 } // namespace
 
 bool SqliteStore::upsert(const domain::CommandSnapshot& row, std::string& error) {
@@ -358,7 +336,7 @@ bool SqliteStore::update_state_if_not_terminal(
   if (!try_parse_state_text_or_error(current_state, current_state_enum, error)) {
     return false;
   }
-  if (!is_allowed_non_terminal_transition(current_state_enum, next_state)) {
+  if (!domain::is_allowed_non_terminal_transition(current_state_enum, next_state)) {
     error = invalid_transition_error(current_state_enum, next_state);
     return false;
   }
@@ -429,7 +407,7 @@ bool SqliteStore::update_terminal_state_once(
   if (!try_parse_state_text_or_error(current_state, current_state_enum, error)) {
     return false;
   }
-  if (!is_allowed_terminal_transition(current_state_enum)) {
+  if (!domain::is_allowed_terminal_transition(current_state_enum)) {
     error = invalid_transition_error(current_state_enum, terminal_state);
     return false;
   }

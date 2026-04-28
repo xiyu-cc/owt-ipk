@@ -1,4 +1,5 @@
 #include "control/json_codec/codec_detail.h"
+#include "owt/protocol/v5/contract.h"
 
 #include <string>
 
@@ -57,6 +58,26 @@ bool command_from_json(const json& j, command& out, std::string& error) {
   }
 
   error.clear();
+  return true;
+}
+
+bool reject_unknown_agent_action_payload_fields(
+    const json& payload,
+    std::string_view action_name,
+    std::string& unknown_key) {
+  if (!payload.is_object()) {
+    unknown_key.clear();
+    return false;
+  }
+
+  for (auto it = payload.begin(); it != payload.end(); ++it) {
+    if (!owt::protocol::v5::agent::is_known_action_payload_field(action_name, it.key())) {
+      unknown_key = it.key();
+      return false;
+    }
+  }
+
+  unknown_key.clear();
   return true;
 }
 
@@ -141,9 +162,9 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
 
   switch (type) {
     case message_type::agent_register: {
-      if (!reject_unknown_fields(
+      if (!reject_unknown_agent_action_payload_fields(
               payload,
-              {"agent_mac", "agent_id", "site_id", "agent_version", "capabilities"},
+              owt::protocol::v5::agent::kActionAgentRegister,
               unknown)) {
         ok = false;
         error = "unknown field in register payload: " + unknown;
@@ -198,7 +219,10 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return p;
     }
     case message_type::agent_heartbeat: {
-      if (!reject_unknown_fields(payload, {"agent_mac", "heartbeat_at_ms", "stats"}, unknown)) {
+      if (!reject_unknown_agent_action_payload_fields(
+              payload,
+              owt::protocol::v5::agent::kActionAgentHeartbeat,
+              unknown)) {
         ok = false;
         error = "unknown field in heartbeat payload: " + unknown;
         return std::monostate{};
@@ -246,7 +270,10 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return c;
     }
     case message_type::agent_command_ack: {
-      if (!reject_unknown_fields(payload, {"agent_mac", "command_id", "status", "message"}, unknown)) {
+      if (!reject_unknown_agent_action_payload_fields(
+              payload,
+              owt::protocol::v5::agent::kActionCommandAck,
+              unknown)) {
         ok = false;
         error = "unknown field in command_ack payload: " + unknown;
         return std::monostate{};
@@ -276,9 +303,9 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return p;
     }
     case message_type::agent_command_result: {
-      if (!reject_unknown_fields(
+      if (!reject_unknown_agent_action_payload_fields(
               payload,
-              {"agent_mac", "command_id", "final_status", "exit_code", "result"},
+              owt::protocol::v5::agent::kActionCommandResult,
               unknown)) {
         ok = false;
         error = "unknown field in command_result payload: " + unknown;

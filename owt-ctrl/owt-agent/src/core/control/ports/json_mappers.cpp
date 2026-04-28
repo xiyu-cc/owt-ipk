@@ -1,7 +1,9 @@
 #include "control/ports/json_mappers.h"
 
 #include <exception>
+#include <initializer_list>
 #include <limits>
+#include <string_view>
 
 namespace control::ports {
 
@@ -64,6 +66,31 @@ bool update_int_field(
   return true;
 }
 
+bool reject_unknown_fields(
+    const nlohmann::json& source,
+    std::string_view object_name,
+    std::initializer_list<std::string_view> allowed,
+    std::string& error) {
+  if (!source.is_object()) {
+    error = std::string(object_name) + " must be object";
+    return false;
+  }
+  for (auto it = source.begin(); it != source.end(); ++it) {
+    bool matched = false;
+    for (const auto candidate : allowed) {
+      if (it.key() == candidate) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      error = "unknown field in " + std::string(object_name) + ": " + it.key();
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 nlohmann::json control_params_to_json(const control_params& params) {
@@ -120,6 +147,9 @@ bool apply_control_params_patch(
     error = "payload must be object";
     return false;
   }
+  if (!reject_unknown_fields(patch, "params payload", {"wol", "ssh"}, error)) {
+    return false;
+  }
 
   if (patch.contains("wol")) {
     if (!patch["wol"].is_object()) {
@@ -127,6 +157,9 @@ bool apply_control_params_patch(
       return false;
     }
     const auto& wol = patch["wol"];
+    if (!reject_unknown_fields(wol, "wol", {"mac", "broadcast", "port"}, error)) {
+      return false;
+    }
     if (!update_string_field(wol, "mac", params.wol.mac, error) ||
         !update_string_field(wol, "broadcast", params.wol.broadcast, error) ||
         !update_int_field(wol, "port", 1, 65535, params.wol.port, error)) {
@@ -140,6 +173,9 @@ bool apply_control_params_patch(
       return false;
     }
     const auto& ssh = patch["ssh"];
+    if (!reject_unknown_fields(ssh, "ssh", {"host", "port", "user", "password", "timeout_ms"}, error)) {
+      return false;
+    }
     if (!update_string_field(ssh, "host", params.ssh.host, error) ||
         !update_int_field(ssh, "port", 1, 65535, params.ssh.port, error) ||
         !update_string_field(ssh, "user", params.ssh.user, error) ||

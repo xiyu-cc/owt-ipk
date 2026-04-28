@@ -35,6 +35,8 @@ std::string to_string(CommandState value);
 bool try_parse_command_kind(std::string_view text, CommandKind& out);
 bool try_parse_command_state(std::string_view text, CommandState& out);
 bool is_terminal(CommandState value);
+bool is_allowed_non_terminal_transition(CommandState current_state, CommandState next_state);
+bool is_allowed_terminal_transition(CommandState current_state);
 
 struct AgentRef {
   std::string mac;

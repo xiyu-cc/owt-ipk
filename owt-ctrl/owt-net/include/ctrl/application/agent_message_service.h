@@ -6,18 +6,25 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <functional>
 #include <string_view>
 
 namespace ctrl::application {
 
 class AgentMessageService {
 public:
+  using RegisterSuccessCallback = std::function<void(
+      std::string_view agent_mac,
+      std::string_view display_id,
+      const nlohmann::json& meta)>;
+
   AgentMessageService(
       ports::ICommandRepository& commands,
       AgentRegistryService& registry,
       ports::IStatusPublisher& publisher,
       ports::IMetrics& metrics,
-      const ports::IClock& clock);
+      const ports::IClock& clock,
+      RegisterSuccessCallback on_register_success = nullptr);
 
   void on_agent_registered(
       std::string_view agent_mac,
@@ -53,6 +60,7 @@ private:
   ports::IStatusPublisher& publisher_;
   ports::IMetrics& metrics_;
   const ports::IClock& clock_;
+  RegisterSuccessCallback on_register_success_;
 };
 
 } // namespace ctrl::application

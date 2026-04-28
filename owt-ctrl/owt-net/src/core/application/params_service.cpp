@@ -1,9 +1,37 @@
 #include "ctrl/application/params_service.h"
 
 #include <cstdint>
+#include <initializer_list>
 #include <stdexcept>
 
 namespace ctrl::application {
+
+namespace {
+
+void reject_unknown_fields(
+    const nlohmann::json& source,
+    std::string_view object_name,
+    std::initializer_list<std::string_view> allowed) {
+  if (!source.is_object()) {
+    throw std::invalid_argument(std::string(object_name) + " must be object");
+  }
+
+  for (auto it = source.begin(); it != source.end(); ++it) {
+    bool matched = false;
+    for (const auto candidate : allowed) {
+      if (it.key() == candidate) {
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      throw std::invalid_argument(
+          "unknown field in " + std::string(object_name) + ": " + it.key());
+    }
+  }
+}
+
+} // namespace
 
 ParamsService::ParamsService(ports::IParamsRepository& repo, const ports::IClock& clock)
     : repo_(repo), clock_(clock) {}
@@ -51,12 +79,33 @@ nlohmann::json ParamsService::load_or_init(std::string_view agent_mac) {
   return params;
 }
 
+std::optional<nlohmann::json> ParamsService::load_existing(std::string_view agent_mac) {
+  if (agent_mac.empty()) {
+    throw std::invalid_argument("agent_mac is required");
+  }
+
+  nlohmann::json params;
+  std::string error;
+  if (repo_.load(agent_mac, params, error)) {
+    if (!params.is_object()) {
+      throw std::runtime_error("load params failed: persisted params must be object");
+    }
+    return params;
+  }
+
+  if (error.empty() || error == "agent params not found") {
+    return std::nullopt;
+  }
+  throw std::runtime_error("load params failed: " + error);
+}
+
 nlohmann::json ParamsService::merge_and_validate(
     std::string_view agent_mac,
     const nlohmann::json& patch) {
   if (!patch.is_object()) {
     throw std::invalid_argument("params payload must be object");
   }
+  reject_unknown_fields(patch, "params payload", {"wol", "ssh"});
 
   auto current = load_or_init(agent_mac);
   if (!current.is_object()) {
@@ -75,6 +124,7 @@ nlohmann::json ParamsService::merge_and_validate(
     if (!patch["wol"].is_object()) {
       throw std::invalid_argument("field wol must be object");
     }
+    reject_unknown_fields(patch["wol"], "wol", {"mac", "broadcast", "port"});
     auto& wol = current["wol"];
     const auto& wol_patch = patch["wol"];
     if (!update_string_field(wol, wol_patch, "mac", error) ||
@@ -88,6 +138,7 @@ nlohmann::json ParamsService::merge_and_validate(
     if (!patch["ssh"].is_object()) {
       throw std::invalid_argument("field ssh must be object");
     }
+    reject_unknown_fields(patch["ssh"], "ssh", {"host", "port", "user", "password", "timeout_ms"});
     auto& ssh = current["ssh"];
     const auto& ssh_patch = patch["ssh"];
     if (!update_string_field(ssh, ssh_patch, "host", error) ||

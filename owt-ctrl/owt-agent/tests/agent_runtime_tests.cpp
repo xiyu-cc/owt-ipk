@@ -1,5 +1,6 @@
 #include "control/agent_runtime.h"
 #include "control/control_json_codec.h"
+#include "control/ports/json_mappers.h"
 #include "control/wss_control_channel.h"
 #include "config.h"
 #include "log.h"
@@ -582,6 +583,37 @@ void test_dispatch_target_mismatch_is_ignored() {
   runtime.stop();
 }
 
+void test_apply_control_params_patch_rejects_unknown_fields() {
+  control::ports::control_params params;
+  std::string error;
+
+  require(
+      !control::ports::apply_control_params_patch(
+          nlohmann::json{{"extra", true}},
+          params,
+          error),
+      "unknown top-level params field should fail");
+  require(
+      error == "unknown field in params payload: extra",
+      "unknown top-level params error mismatch");
+
+  require(
+      !control::ports::apply_control_params_patch(
+          nlohmann::json{{"wol", {{"magic", true}}}},
+          params,
+          error),
+      "unknown wol field should fail");
+  require(error == "unknown field in wol: magic", "unknown wol field error mismatch");
+
+  require(
+      !control::ports::apply_control_params_patch(
+          nlohmann::json{{"ssh", {{"jump_host", "10.0.0.1"}}}},
+          params,
+          error),
+      "unknown ssh field should fail");
+  require(error == "unknown field in ssh: jump_host", "unknown ssh field error mismatch");
+}
+
 void test_config_parser_rejects_trailing_numeric_garbage() {
   const auto unique = std::to_string(control::unix_time_ms_now());
   const auto path = std::filesystem::path("/tmp") / ("owt-agent-config-" + unique + ".ini");
@@ -698,6 +730,7 @@ int main() {
     test_seen_command_cache_ttl();
     test_start_rejects_unsupported_protocol_version();
     test_dispatch_target_mismatch_is_ignored();
+    test_apply_control_params_patch_rejects_unknown_fields();
     test_config_parser_rejects_trailing_numeric_garbage();
     test_wss_reconnect_reliable_outbound_queue();
     log::shutdown();

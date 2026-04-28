@@ -4,6 +4,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace ctrl::application {
@@ -21,12 +22,14 @@ AgentMessageService::AgentMessageService(
     AgentRegistryService& registry,
     ports::IStatusPublisher& publisher,
     ports::IMetrics& metrics,
-    const ports::IClock& clock)
+    const ports::IClock& clock,
+    RegisterSuccessCallback on_register_success)
     : commands_(commands),
       registry_(registry),
       publisher_(publisher),
       metrics_(metrics),
-      clock_(clock) {}
+      clock_(clock),
+      on_register_success_(std::move(on_register_success)) {}
 
 void AgentMessageService::on_agent_registered(
     std::string_view agent_mac,
@@ -70,6 +73,20 @@ void AgentMessageService::on_agent_registered(
   }
   publisher_.publish_agent("agent_register", agent_mac);
   publisher_.publish_snapshot("agent_register", agent_mac);
+  if (on_register_success_) {
+    try {
+      on_register_success_(agent_mac, state.agent.display_id, meta);
+    } catch (const std::exception& ex) {
+      log::warn(
+          "agent register callback failed: agent_mac={}, error={}",
+          agent_mac,
+          ex.what());
+    } catch (...) {
+      log::warn(
+          "agent register callback failed: agent_mac={}, error=unknown",
+          agent_mac);
+    }
+  }
 }
 
 void AgentMessageService::on_agent_heartbeat(

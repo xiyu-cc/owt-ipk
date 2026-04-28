@@ -119,6 +119,19 @@ void UiSubscriptionStore::unsubscribe(std::string_view session_id) {
   rows_.erase(std::string(session_id));
 }
 
+bool UiSubscriptionStore::get_subscription(std::string_view session_id, Subscription& out) const {
+  if (session_id.empty()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lk(mutex_);
+  const auto it = rows_.find(std::string(session_id));
+  if (it == rows_.end()) {
+    return false;
+  }
+  out = it->second;
+  return true;
+}
+
 std::vector<std::pair<std::string, UiSubscriptionStore::Subscription>> UiSubscriptionStore::snapshot() const {
   std::lock_guard<std::mutex> lk(mutex_);
   std::vector<std::pair<std::string, Subscription>> out;
@@ -499,41 +512,25 @@ void BusStatusPublisher::push_agent_to_session(
 
 void BusStatusPublisher::publish_snapshot(std::string_view reason, std::string_view agent_mac) {
   const auto rows = subscriptions_.snapshot();
-  bool has_snapshot_subscribers = false;
-  bool has_agent_subscribers = false;
-  for (const auto& row : rows) {
-    if (row.second.scope == UiSubscriptionStore::Scope::All) {
-      has_snapshot_subscribers = true;
-      continue;
-    }
-    if (!agent_mac.empty() && row.second.agent_mac == agent_mac) {
-      has_agent_subscribers = true;
-    }
-  }
-
-  std::shared_ptr<const std::string> snapshot_message;
-  if (has_snapshot_subscribers) {
-    snapshot_message = std::make_shared<const std::string>(build_snapshot_message(reason));
-  }
-
-  std::shared_ptr<const std::string> agent_message;
-  if (has_agent_subscribers && !agent_mac.empty()) {
-    agent_message = std::make_shared<const std::string>(build_agent_message(reason, agent_mac));
-  }
-
   for (const auto& row : rows) {
     const auto session_id = row.first;
-    const auto sub = row.second;
     const auto result = event_scheduler_.post(
         session_id,
         app::ws::scheduler::EventPriority::Low,
-        [this, session_id, sub, agent_mac = std::string(agent_mac), snapshot_message, agent_message] {
-          if (sub.scope == UiSubscriptionStore::Scope::All && snapshot_message) {
-            (void)ui_sessions_.enqueue(session_id, *snapshot_message);
+        [this,
+         session_id,
+         reason = std::string(reason),
+         agent_mac = std::string(agent_mac)] {
+          UiSubscriptionStore::Subscription sub;
+          if (!subscriptions_.get_subscription(session_id, sub)) {
             return;
           }
-          if (!agent_mac.empty() && sub.agent_mac == agent_mac && agent_message) {
-            (void)ui_sessions_.enqueue(session_id, *agent_message);
+          if (sub.scope == UiSubscriptionStore::Scope::All) {
+            push_snapshot_to_session(session_id, reason);
+            return;
+          }
+          if (!agent_mac.empty() && sub.agent_mac == agent_mac) {
+            push_agent_to_session(session_id, agent_mac, reason);
           }
         });
     if (result == app::ws::scheduler::PostResult::DroppedLowPriority) {
@@ -557,15 +554,17 @@ void BusStatusPublisher::publish_agent(std::string_view reason, std::string_view
   const auto rows = subscriptions_.snapshot();
   for (const auto& row : rows) {
     const auto session_id = row.first;
-    const auto sub = row.second;
     const auto result = event_scheduler_.post(
         session_id,
         app::ws::scheduler::EventPriority::High,
         [this,
          session_id,
-         sub,
          reason = std::string(reason),
          agent_mac = std::string(agent_mac)] {
+          UiSubscriptionStore::Subscription sub;
+          if (!subscriptions_.get_subscription(session_id, sub)) {
+            return;
+          }
           if (sub.scope == UiSubscriptionStore::Scope::All || sub.agent_mac == agent_mac) {
             push_agent_to_session(session_id, agent_mac, reason);
           }
@@ -587,14 +586,17 @@ void BusStatusPublisher::publish_command_event(
   const auto resource = presenter::to_command_event_notification(command, event);
   for (const auto& row : rows) {
     const auto session_id = row.first;
-    const auto sub = row.second;
-    if (sub.scope != UiSubscriptionStore::Scope::All && sub.agent_mac != command.agent.mac) {
-      continue;
-    }
     const auto result = event_scheduler_.post(
         session_id,
         app::ws::scheduler::EventPriority::High,
-        [this, session_id, resource] {
+        [this, session_id, resource, agent_mac = command.agent.mac] {
+          UiSubscriptionStore::Subscription sub;
+          if (!subscriptions_.get_subscription(session_id, sub)) {
+            return;
+          }
+          if (sub.scope != UiSubscriptionStore::Scope::All && sub.agent_mac != agent_mac) {
+            return;
+          }
           const auto payload = nlohmann::json{
               {"reason", std::string(owt::protocol::v5::ui::kEventCommandEvent)},
               {"resource", resource},

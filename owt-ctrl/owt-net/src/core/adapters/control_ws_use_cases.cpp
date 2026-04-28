@@ -4,7 +4,6 @@
 #include "owt/protocol/v5/contract.h"
 
 #include <stdexcept>
-#include <initializer_list>
 #include <string>
 
 namespace ctrl::adapters {
@@ -38,20 +37,13 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
     }
   };
 
-  auto ensure_payload_fields = [&](std::string_view action_name, std::initializer_list<std::string_view> allowed) {
+  auto ensure_payload_fields = [&](std::string_view action_name) {
     if (!in.payload.is_object()) {
       throw std::invalid_argument("payload must be object");
     }
     for (auto it = in.payload.begin(); it != in.payload.end(); ++it) {
       const auto key = it.key();
-      bool allowed_key = false;
-      for (const auto candidate : allowed) {
-        if (key == candidate) {
-          allowed_key = true;
-          break;
-        }
-      }
-      if (!allowed_key) {
+      if (!owt::protocol::v5::agent::is_known_action_payload_field(action_name, key)) {
         throw std::invalid_argument(
             "unknown field in " + std::string(action_name) + " payload: " + key);
       }
@@ -60,9 +52,7 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
 
   switch (in.kind) {
     case WsMessageKind::Register: {
-      ensure_payload_fields(
-          owt::protocol::v5::agent::kActionAgentRegister,
-          {"agent_mac", "agent_id", "site_id", "agent_version", "capabilities"});
+      ensure_payload_fields(owt::protocol::v5::agent::kActionAgentRegister);
       if (in.agent_mac.empty()) {
         log::warn(
             "reject register: missing agent_mac, session_token={}, trace_id={}",
@@ -109,9 +99,7 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
       return;
     }
     case WsMessageKind::Heartbeat: {
-      ensure_payload_fields(
-          owt::protocol::v5::agent::kActionAgentHeartbeat,
-          {"agent_mac", "heartbeat_at_ms", "stats"});
+      ensure_payload_fields(owt::protocol::v5::agent::kActionAgentHeartbeat);
       if (in.agent_mac.empty()) {
         log::warn(
             "ignore heartbeat: missing agent_mac, session_token={}, trace_id={}",
@@ -132,9 +120,7 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
       return;
     }
     case WsMessageKind::CommandAck:
-      ensure_payload_fields(
-          owt::protocol::v5::agent::kActionCommandAck,
-          {"agent_mac", "command_id", "status", "message"});
+      ensure_payload_fields(owt::protocol::v5::agent::kActionCommandAck);
       ensure_strict_action_session_binding();
       messages_.on_command_ack(
           in.agent_mac,
@@ -144,9 +130,7 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
           in.payload.value("message", ""));
       return;
     case WsMessageKind::CommandResult:
-      ensure_payload_fields(
-          owt::protocol::v5::agent::kActionCommandResult,
-          {"agent_mac", "command_id", "final_status", "exit_code", "result"});
+      ensure_payload_fields(owt::protocol::v5::agent::kActionCommandResult);
       ensure_strict_action_session_binding();
       if (!in.payload.contains("result") || !in.payload["result"].is_object()) {
         throw std::invalid_argument("invalid command.result payload");

@@ -5,7 +5,6 @@
 #include "owt/protocol/v5/contract.h"
 
 #include <stdexcept>
-#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -47,21 +46,13 @@ std::string require_payload_agent_mac(
 
 void reject_unknown_payload_fields(
     const nlohmann::json& payload,
-    std::string_view action_name,
-    std::initializer_list<std::string_view> allowed) {
+    std::string_view action_name) {
   if (!payload.is_object()) {
     throw std::invalid_argument("payload must be object");
   }
   for (auto it = payload.begin(); it != payload.end(); ++it) {
     const auto key = it.key();
-    bool allowed_key = false;
-    for (const auto candidate : allowed) {
-      if (key == candidate) {
-        allowed_key = true;
-        break;
-      }
-    }
-    if (!allowed_key) {
+    if (!owt::protocol::v5::agent::is_known_action_payload_field(action_name, key)) {
       throw std::invalid_argument(
           "unknown field in " + std::string(action_name) + " payload: " + key);
     }
@@ -145,8 +136,7 @@ void AgentActionGateway::handle_register(
     const ws::BusEnvelope& req) {
   reject_unknown_payload_fields(
       req.payload,
-      owt::protocol::v5::agent::kActionAgentRegister,
-      {"agent_mac", "agent_id", "site_id", "agent_version", "capabilities"});
+      owt::protocol::v5::agent::kActionAgentRegister);
   if (!req.payload.contains("agent_mac") || !req.payload["agent_mac"].is_string() ||
       req.payload["agent_mac"].get<std::string>().empty()) {
     throw std::invalid_argument("agent_mac is required");
@@ -201,8 +191,7 @@ void AgentActionGateway::handle_heartbeat(
   (void)conn;
   reject_unknown_payload_fields(
       req.payload,
-      owt::protocol::v5::agent::kActionAgentHeartbeat,
-      {"agent_mac", "heartbeat_at_ms", "stats"});
+      owt::protocol::v5::agent::kActionAgentHeartbeat);
   const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionAgentHeartbeat);
   enforce_bound_agent_for_strict_action(
       agent_sessions_,
@@ -240,8 +229,7 @@ void AgentActionGateway::handle_command_ack(
   (void)conn;
   reject_unknown_payload_fields(
       req.payload,
-      owt::protocol::v5::agent::kActionCommandAck,
-      {"agent_mac", "command_id", "status", "message"});
+      owt::protocol::v5::agent::kActionCommandAck);
   const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionCommandAck);
   enforce_bound_agent_for_strict_action(
       agent_sessions_,
@@ -280,8 +268,7 @@ void AgentActionGateway::handle_command_result(
   (void)conn;
   reject_unknown_payload_fields(
       req.payload,
-      owt::protocol::v5::agent::kActionCommandResult,
-      {"agent_mac", "command_id", "final_status", "exit_code", "result"});
+      owt::protocol::v5::agent::kActionCommandResult);
   const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionCommandResult);
   enforce_bound_agent_for_strict_action(
       agent_sessions_,

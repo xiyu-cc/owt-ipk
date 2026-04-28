@@ -75,6 +75,7 @@ public:
   void subscribe_all(std::string_view session_id);
   void subscribe_agent(std::string_view session_id, std::string_view agent_mac);
   void unsubscribe(std::string_view session_id);
+  bool get_subscription(std::string_view session_id, Subscription& out) const;
   std::vector<std::pair<std::string, Subscription>> snapshot() const;
 
 private:

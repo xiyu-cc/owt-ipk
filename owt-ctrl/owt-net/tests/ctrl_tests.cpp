@@ -46,33 +46,23 @@ void require(bool condition, const std::string& message) {
   }
 }
 
+template <typename Predicate>
+bool wait_until(Predicate&& predicate, int timeout_ms = 1000) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (predicate()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return predicate();
+}
+
 std::string invalid_transition_error(
     ctrl::domain::CommandState current_state,
     ctrl::domain::CommandState next_state) {
   return "invalid state transition: " + ctrl::domain::to_string(current_state) + " -> " +
       ctrl::domain::to_string(next_state);
-}
-
-bool is_allowed_non_terminal_transition(
-    ctrl::domain::CommandState current_state,
-    ctrl::domain::CommandState next_state) {
-  if (next_state == ctrl::domain::CommandState::Dispatched) {
-    return current_state == ctrl::domain::CommandState::RetryPending;
-  }
-  if (next_state == ctrl::domain::CommandState::Acked) {
-    return current_state == ctrl::domain::CommandState::Dispatched;
-  }
-  if (next_state == ctrl::domain::CommandState::Running) {
-    return current_state == ctrl::domain::CommandState::Acked;
-  }
-  return false;
-}
-
-bool is_allowed_terminal_transition(ctrl::domain::CommandState current_state) {
-  return current_state == ctrl::domain::CommandState::Dispatched ||
-      current_state == ctrl::domain::CommandState::Acked ||
-      current_state == ctrl::domain::CommandState::Running ||
-      current_state == ctrl::domain::CommandState::RetryPending;
 }
 
 void sqlite_exec(sqlite3* db, const std::string& sql, const std::string& context) {
@@ -247,7 +237,7 @@ public:
       error.clear();
       return true;
     }
-    if (!is_allowed_non_terminal_transition(it->second.state, next_state)) {
+    if (!ctrl::domain::is_allowed_non_terminal_transition(it->second.state, next_state)) {
       error = invalid_transition_error(it->second.state, next_state);
       return false;
     }
@@ -283,7 +273,7 @@ public:
       error.clear();
       return true;
     }
-    if (!is_allowed_terminal_transition(it->second.state)) {
+    if (!ctrl::domain::is_allowed_terminal_transition(it->second.state)) {
       error = invalid_transition_error(it->second.state, terminal_state);
       return false;
     }
@@ -1086,6 +1076,204 @@ void test_agent_registry_persist_failure_observable() {
   require(!loaded.online, "in-memory disconnect state should still apply");
 }
 
+void test_subscription_switch_drops_stale_command_event() {
+  test_clock clock;
+  clock.set(2800);
+  in_memory_agent_repository agent_repo;
+  ctrl::application::AgentRegistryService registry(agent_repo, clock);
+
+  ctrl::domain::AgentState agent_a;
+  agent_a.agent = {"AA:00:00:00:26:01", "agent-26-01"};
+  agent_a.online = true;
+  agent_a.registered_at_ms = clock.now_ms();
+  agent_a.last_seen_at_ms = clock.now_ms();
+  agent_a.last_heartbeat_at_ms = clock.now_ms();
+  require(registry.on_register(agent_a), "seed agent A should succeed");
+
+  ctrl::domain::AgentState agent_b;
+  agent_b.agent = {"AA:00:00:00:26:02", "agent-26-02"};
+  agent_b.online = true;
+  agent_b.registered_at_ms = clock.now_ms();
+  agent_b.last_seen_at_ms = clock.now_ms();
+  agent_b.last_heartbeat_at_ms = clock.now_ms();
+  require(registry.on_register(agent_b), "seed agent B should succeed");
+
+  app::bootstrap::runtime::UiSubscriptionStore subscriptions;
+  app::bootstrap::runtime::UiSessionRegistry ui_sessions(
+      app::bootstrap::runtime::UiSessionRegistry::Config{
+          .queue_limit = 16,
+          .send_timeout_ms = 1000,
+      });
+  auto conn = std::make_shared<fake_ws_connection>();
+  ui_sessions.add_session("sess-switch", conn, "tester");
+  subscriptions.subscribe_agent("sess-switch", agent_a.agent.mac);
+
+  app::ws::scheduler::EventScheduler scheduler;
+  app::ws::scheduler::EventSchedulerConfig scheduler_cfg;
+  scheduler_cfg.workers = 1;
+  scheduler_cfg.queue_capacity = 256;
+  require(scheduler.start(scheduler_cfg), "event scheduler should start");
+
+  app::bootstrap::runtime::BusStatusPublisher publisher(
+      registry,
+      clock,
+      subscriptions,
+      ui_sessions,
+      scheduler);
+
+  std::mutex gate_mutex;
+  std::condition_variable gate_cv;
+  bool gate_started = false;
+  bool gate_released = false;
+  const auto gate_result = scheduler.post(
+      "sess-switch",
+      app::ws::scheduler::EventPriority::High,
+      [&] {
+        std::unique_lock<std::mutex> lk(gate_mutex);
+        gate_started = true;
+        gate_cv.notify_all();
+        gate_cv.wait(lk, [&] { return gate_released; });
+      });
+  require(
+      gate_result == app::ws::scheduler::PostResult::Accepted,
+      "gate task should be accepted");
+  require(
+      wait_until([&] {
+        std::lock_guard<std::mutex> lk(gate_mutex);
+        return gate_started;
+      }),
+      "gate task should start");
+
+  ctrl::domain::CommandSnapshot command;
+  command.spec.command_id = "cmd-stale-switch";
+  command.spec.trace_id = "trc-stale-switch";
+  command.spec.kind = ctrl::domain::CommandKind::HostReboot;
+  command.agent = agent_a.agent;
+  command.state = ctrl::domain::CommandState::Dispatched;
+  command.created_at_ms = clock.now_ms();
+  command.updated_at_ms = clock.now_ms();
+
+  ctrl::domain::CommandEvent event;
+  event.command_id = command.spec.command_id;
+  event.type = "command_push_sent";
+  event.state = ctrl::domain::CommandState::Dispatched;
+  event.detail = nlohmann::json{{"trace_id", command.spec.trace_id}};
+  event.created_at_ms = clock.now_ms();
+
+  publisher.publish_command_event(command, event);
+  subscriptions.subscribe_agent("sess-switch", agent_b.agent.mac);
+
+  {
+    std::lock_guard<std::mutex> lk(gate_mutex);
+    gate_released = true;
+  }
+  gate_cv.notify_all();
+
+  const bool stale_event_delivered = wait_until(
+      [&] { return !conn->sent_messages_snapshot().empty(); },
+      300);
+  require(!stale_event_delivered, "switched subscription should drop stale command.event");
+
+  scheduler.stop();
+  ui_sessions.close_all();
+}
+
+void test_register_resync_uses_persisted_params_only() {
+  test_clock clock;
+  clock.set(2900);
+  test_id_generator id_generator;
+  in_memory_command_repository command_repo;
+  in_memory_agent_repository agent_repo;
+  in_memory_params_repository params_repo;
+  in_memory_audit_repository audit_repo;
+  fake_agent_channel channel;
+  fake_status_publisher publisher;
+  fake_metrics metrics;
+  ctrl::application::AgentRegistryService registry(agent_repo, clock);
+  ctrl::application::ParamsService params_service(params_repo, clock);
+  ctrl::application::CommandOrchestrator orchestrator(
+      command_repo,
+      channel,
+      params_service,
+      audit_repo,
+      publisher,
+      metrics,
+      clock,
+      id_generator);
+
+  app::ws::scheduler::EventScheduler scheduler;
+  app::ws::scheduler::EventSchedulerConfig scheduler_cfg;
+  scheduler_cfg.workers = 1;
+  scheduler_cfg.queue_capacity = 256;
+  require(scheduler.start(scheduler_cfg), "event scheduler should start");
+
+  const std::string mac_with_persisted = "AA:00:00:00:27:01";
+  const std::string mac_without_persisted = "AA:00:00:00:27:02";
+  const nlohmann::json persisted_params = nlohmann::json{
+      {"wol", {{"mac", "AA:00:00:00:27:01"}, {"broadcast", "192.168.1.255"}, {"port", 9}}},
+      {"ssh", {{"host", "10.0.0.27"}, {"port", 22}, {"user", "root"}, {"password", "pw"}, {"timeout_ms", 5000}}},
+  };
+  params_service.save(mac_with_persisted, persisted_params);
+
+  channel.set_online(mac_with_persisted, true);
+  channel.set_online(mac_without_persisted, true);
+  std::atomic<bool> callback_enqueue_failed{false};
+
+  ctrl::application::AgentMessageService service(
+      command_repo,
+      registry,
+      publisher,
+      metrics,
+      clock,
+      [&](std::string_view agent_mac, std::string_view display_id, const nlohmann::json&) {
+        const auto post_result = scheduler.post(
+            std::string(agent_mac),
+            app::ws::scheduler::EventPriority::High,
+            [&,
+             agent_mac = std::string(agent_mac),
+             display_id = std::string(display_id)] {
+              const auto persisted = params_service.load_existing(agent_mac);
+              if (!persisted.has_value()) {
+                return;
+              }
+              ctrl::application::SubmitCommandInput input;
+              input.agent.mac = agent_mac;
+              input.agent.display_id = display_id.empty() ? agent_mac : display_id;
+              input.kind = ctrl::domain::CommandKind::ParamsSet;
+              input.payload = *persisted;
+              input.wait_result = false;
+              input.max_retry = 1;
+              input.actor_type = "system";
+              input.actor_id = "agent-register-resync";
+              (void)orchestrator.submit(input);
+            });
+        if (post_result != app::ws::scheduler::PostResult::Accepted) {
+          callback_enqueue_failed.store(true, std::memory_order_relaxed);
+        }
+      });
+
+  service.on_agent_registered(mac_with_persisted, "agent-27-01", nlohmann::json::object());
+  service.on_agent_registered(mac_without_persisted, "agent-27-02", nlohmann::json::object());
+
+  require(
+      wait_until([&] { return channel.sent_commands_.size() == 1; }),
+      "only one params_set command should be dispatched");
+  require(
+      channel.sent_commands_.front().first == mac_with_persisted,
+      "resync should target the agent with persisted params");
+  require(
+      channel.sent_commands_.front().second.kind == ctrl::domain::CommandKind::ParamsSet,
+      "resync should dispatch params_set");
+  require(
+      channel.sent_commands_.front().second.payload["ssh"]["host"].get<std::string>() == "10.0.0.27",
+      "resync should dispatch persisted payload");
+  require(
+      !callback_enqueue_failed.load(std::memory_order_relaxed),
+      "resync callback enqueue should be accepted");
+
+  scheduler.stop();
+}
+
 void test_ui_session_registry_non_blocking_backpressure() {
   app::bootstrap::runtime::UiSessionRegistry registry(
       app::bootstrap::runtime::UiSessionRegistry::Config{
@@ -1208,6 +1396,32 @@ void test_params_rate_limiter_redaction() {
     invalid_throw = true;
   }
   require(invalid_throw, "invalid patch should throw invalid_argument");
+
+  bool unknown_top_level_throw = false;
+  try {
+    (void)params_service.merge_and_validate(
+        "AA:00:00:00:40:01",
+        nlohmann::json{{"extra", true}});
+  } catch (const std::invalid_argument& ex) {
+    unknown_top_level_throw =
+        std::string(ex.what()) == "unknown field in params payload: extra";
+  }
+  require(unknown_top_level_throw, "unknown top-level field should be rejected");
+
+  bool unknown_nested_throw = false;
+  try {
+    (void)params_service.merge_and_validate(
+        "AA:00:00:00:40:01",
+        nlohmann::json{{"ssh", {{"host", "10.0.0.2"}, {"unknown", 1}}}});
+  } catch (const std::invalid_argument& ex) {
+    unknown_nested_throw = std::string(ex.what()) == "unknown field in ssh: unknown";
+  }
+  require(unknown_nested_throw, "unknown nested field should be rejected");
+
+  const auto existing = params_service.load_existing("AA:00:00:00:40:01");
+  require(existing.has_value(), "existing params should be loadable without init side effect");
+  const auto missing = params_service.load_existing("AA:00:00:00:40:99");
+  require(!missing.has_value(), "missing params should not auto-init in load_existing");
 
   ctrl::application::RateLimiterService limiter;
   limiter.configure(true, 1, 1);
@@ -2321,6 +2535,8 @@ int main() {
     test_agent_message_terminal_once();
     test_agent_message_rejects_invalid_transition();
     test_agent_registry_persist_failure_observable();
+    test_subscription_switch_drops_stale_command_event();
+    test_register_resync_uses_persisted_params_only();
     test_ui_session_registry_non_blocking_backpressure();
     test_retry_service();
     test_params_rate_limiter_redaction();

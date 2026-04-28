@@ -4,6 +4,7 @@
 #include "owt/protocol/v5/contract.h"
 
 #include <algorithm>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -34,7 +35,54 @@ RuntimeComposition::RuntimeComposition(const Config& cfg)
           registry_service,
           status_publisher,
           metrics,
-          clock),
+          clock,
+          [this](std::string_view agent_mac, std::string_view display_id, const nlohmann::json&) {
+            if (agent_mac.empty()) {
+              return;
+            }
+            const std::string agent_mac_key(agent_mac);
+            const std::string agent_display_id = display_id.empty()
+                ? agent_mac_key
+                : std::string(display_id);
+
+            const auto post_result = event_scheduler.post(
+                agent_mac_key,
+                app::ws::scheduler::EventPriority::High,
+                [this, agent_mac_key, agent_display_id] {
+                  try {
+                    const auto persisted = params_service.load_existing(agent_mac_key);
+                    if (!persisted.has_value()) {
+                      return;
+                    }
+                    ctrl::application::SubmitCommandInput input;
+                    input.agent.mac = agent_mac_key;
+                    input.agent.display_id = agent_display_id;
+                    input.kind = ctrl::domain::CommandKind::ParamsSet;
+                    input.payload = *persisted;
+                    input.wait_result = false;
+                    input.max_retry = 1;
+                    input.actor_type = "system";
+                    input.actor_id = "agent-register-resync";
+                    (void)command_orchestrator.submit(input);
+                  } catch (const std::exception& ex) {
+                    log::warn(
+                        "agent register params resync failed: agent_mac={}, error={}",
+                        agent_mac_key,
+                        ex.what());
+                  } catch (...) {
+                    log::warn(
+                        "agent register params resync failed: agent_mac={}, error=unknown",
+                        agent_mac_key);
+                  }
+                });
+
+            if (post_result != app::ws::scheduler::PostResult::Accepted) {
+              log::warn(
+                  "agent register params resync enqueue failed: agent_mac={}, result={}",
+                  agent_mac_key,
+                  to_post_result_string(post_result));
+            }
+          }),
       control_ws_use_cases(registry_service, agent_message_service),
       retry_service(store, agent_channel, status_publisher, metrics, clock),
       lifecycle(
@@ -137,7 +185,8 @@ void RuntimeComposition::on_ui_message(
   }
 
   auto partition_key = ctx->session_id;
-  if (req.payload.contains("agent_mac") && req.payload["agent_mac"].is_string() &&
+  if (req.name != owt::protocol::v5::ui::kActionSessionSubscribe &&
+      req.payload.contains("agent_mac") && req.payload["agent_mac"].is_string() &&
       !req.payload["agent_mac"].get<std::string>().empty()) {
     partition_key = req.payload["agent_mac"].get<std::string>();
   }

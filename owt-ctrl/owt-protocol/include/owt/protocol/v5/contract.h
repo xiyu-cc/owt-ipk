@@ -40,6 +40,30 @@ inline constexpr std::string_view kEventAgentRegistered = "agent.registered";
 inline constexpr std::string_view kEventCommandDispatch = "command.dispatch";
 inline constexpr std::string_view kErrorServerError = "server.error";
 
+inline bool is_known_action_payload_field(
+    std::string_view action_name,
+    std::string_view field_name) noexcept {
+  if (action_name == kActionAgentRegister) {
+    return field_name == "agent_mac" || field_name == "agent_id" ||
+        field_name == "site_id" || field_name == "agent_version" ||
+        field_name == "capabilities";
+  }
+  if (action_name == kActionAgentHeartbeat) {
+    return field_name == "agent_mac" || field_name == "heartbeat_at_ms" ||
+        field_name == "stats";
+  }
+  if (action_name == kActionCommandAck) {
+    return field_name == "agent_mac" || field_name == "command_id" ||
+        field_name == "status" || field_name == "message";
+  }
+  if (action_name == kActionCommandResult) {
+    return field_name == "agent_mac" || field_name == "command_id" ||
+        field_name == "final_status" || field_name == "exit_code" ||
+        field_name == "result";
+  }
+  return false;
+}
+
 } // namespace agent
 
 namespace command {

@@ -115,4 +115,26 @@ bool is_terminal(CommandState value) {
          value == CommandState::TimedOut || value == CommandState::Cancelled;
 }
 
+bool is_allowed_non_terminal_transition(
+    CommandState current_state,
+    CommandState next_state) {
+  if (next_state == CommandState::Dispatched) {
+    return current_state == CommandState::RetryPending;
+  }
+  if (next_state == CommandState::Acked) {
+    return current_state == CommandState::Dispatched;
+  }
+  if (next_state == CommandState::Running) {
+    return current_state == CommandState::Acked;
+  }
+  return false;
+}
+
+bool is_allowed_terminal_transition(CommandState current_state) {
+  return current_state == CommandState::Dispatched ||
+      current_state == CommandState::Acked ||
+      current_state == CommandState::Running ||
+      current_state == CommandState::RetryPending;
+}
+
 } // namespace ctrl::domain
