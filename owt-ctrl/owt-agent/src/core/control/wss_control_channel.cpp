@@ -301,7 +301,9 @@ struct wss_control_channel::impl {
     }
 
     if (client_wsi != nullptr) {
-      lws_wsi_close(client_wsi, LWS_TO_KILL_ASYNC);
+      // Avoid lws_wsi_close() macro in C++ builds: it passes an int literal
+      // for enum pending_timeout and fails with strict type checking.
+      lws_set_timeout(client_wsi, PENDING_TIMEOUT_CLOSE_SEND, LWS_TO_KILL_ASYNC);
       lws_service(created_context, 0);
       client_wsi = nullptr;
     }
