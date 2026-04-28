@@ -29,6 +29,10 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
   switch (in.kind) {
     case WsMessageKind::Register: {
       if (in.agent_mac.empty()) {
+        log::warn(
+            "reject register: missing agent_mac, session_token={}, trace_id={}",
+            in.session_token,
+            in.trace_id);
         out.push_back(WsOutboundMessage{
             in.session_token,
             std::string(owt::protocol::v5::agent::kErrorServerError),
@@ -54,6 +58,12 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
             registry_.persist_failure_count());
       }
       messages_.on_agent_registered(in.agent_mac, in.agent_id, in.payload);
+      log::info(
+          "agent register accepted: agent_mac={}, agent_id={}, session_token={}, trace_id={}",
+          in.agent_mac,
+          in.agent_id.empty() ? in.agent_mac : in.agent_id,
+          in.session_token,
+          in.trace_id);
       out.push_back(WsOutboundMessage{
           in.session_token,
           std::string(owt::protocol::v5::agent::kEventAgentRegistered),
@@ -65,6 +75,10 @@ void ControlWsUseCases::on_text(const WsInboundMessage& in, std::vector<WsOutbou
     }
     case WsMessageKind::Heartbeat: {
       if (in.agent_mac.empty()) {
+        log::warn(
+            "ignore heartbeat: missing agent_mac, session_token={}, trace_id={}",
+            in.session_token,
+            in.trace_id);
         return;
       }
       const int64_t heartbeat_at_ms =
@@ -126,6 +140,10 @@ void ControlWsUseCases::on_close(std::string_view session_token) {
     session_agents_.erase(it);
   }
   if (!agent_mac.empty()) {
+    log::info(
+        "agent session closing: agent_mac={}, session_token={}",
+        agent_mac,
+        session_token);
     std::string disconnect_error;
     if (!registry_.on_disconnect(agent_mac, session_token, &disconnect_error)) {
       log::warn(

@@ -1,6 +1,5 @@
 #include "app/bootstrap/runtime/ui_action_gateway.h"
 
-#include "app/presenter/serializers.h"
 #include "app/runtime_log.h"
 #include "owt/protocol/v5/contract.h"
 
@@ -35,9 +34,6 @@ UiActionGateway::UiActionGateway(
   handlers_ = {
       {std::string(owt::protocol::v5::ui::kActionSessionSubscribe), [this](const auto& s, const auto& a, const auto& r) {
          handle_session_subscribe(s, a, r);
-       }},
-      {std::string(owt::protocol::v5::ui::kActionAgentList), [this](const auto& s, const auto& a, const auto& r) {
-         handle_agent_list(s, a, r);
        }},
       {std::string(owt::protocol::v5::ui::kActionParamsGet), [this](const auto& s, const auto& a, const auto& r) {
          handle_params_get(s, a, r);
@@ -98,24 +94,7 @@ void UiActionGateway::handle_session_subscribe(
     const std::string& actor_id,
     const ws::BusEnvelope& req) {
   (void)actor_id;
-  const auto scope = req.payload.value("scope", std::string{"all"});
-  if (scope == "all") {
-    subscriptions_.subscribe_all(session_id);
-    const auto post_result = event_scheduler_.post(
-        session_id,
-        app::ws::scheduler::EventPriority::Low,
-        [this, session_id] {
-          status_publisher_.push_snapshot_to_session(session_id, "subscribe");
-        });
-    if (post_result != app::ws::scheduler::PostResult::Accepted) {
-      log::warn(
-          "subscribe snapshot enqueue failed: session_id={}, result={}",
-          session_id,
-          to_post_result_string(post_result));
-    }
-    send_ui_result(session_id, req.name, req.id, nlohmann::json{{"scope", "all"}});
-    return;
-  }
+  const auto scope = req.payload.value("scope", std::string{});
 
   if (scope == "agent") {
     if (!req.payload.contains("agent_mac") || !req.payload["agent_mac"].is_string() ||
@@ -145,42 +124,7 @@ void UiActionGateway::handle_session_subscribe(
     return;
   }
 
-  throw std::invalid_argument("scope must be all or agent");
-}
-
-void UiActionGateway::handle_agent_list(
-    const std::string& session_id,
-    const std::string& actor_id,
-    const ws::BusEnvelope& req) {
-  (void)actor_id;
-
-  bool include_offline = true;
-  if (req.payload.contains("include_offline")) {
-    if (!req.payload["include_offline"].is_boolean()) {
-      throw std::invalid_argument("include_offline must be boolean");
-    }
-    include_offline = req.payload["include_offline"].get<bool>();
-  }
-
-  const auto rows = registry_service_.list_agents(include_offline);
-  nlohmann::json agents = nlohmann::json::array();
-  size_t online_count = 0;
-  for (const auto& row : rows) {
-    if (row.online) {
-      ++online_count;
-    }
-    agents.push_back(presenter::to_agent_json(row));
-  }
-  send_ui_result(
-      session_id,
-      req.name,
-      req.id,
-      nlohmann::json{
-          {"agents", std::move(agents)},
-          {"online_count", online_count},
-          {"total_count", rows.size()},
-          {"include_offline", include_offline},
-      });
+  throw std::invalid_argument("scope must be agent");
 }
 
 void UiActionGateway::handle_params_get(

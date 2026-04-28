@@ -85,11 +85,17 @@
   - 终态通过 `command.event` 推送获取。
 - 协议契约（v5）：
   - UI WS 路由：`/ws/v5/ui`，Agent WS 路由：`/ws/v5/agent`。
-  - UI action：`session.subscribe`、`agent.list`、`params.get`、`params.update`、`command.submit`。
+  - UI action：`session.subscribe`、`params.get`、`params.update`、`command.submit`。
   - UI event：`agent.snapshot`、`agent.update`、`command.event`。
+  - 连接建立后服务端主动推送全量 `agent.snapshot`；`session.subscribe` 仅用于 `scope=agent` 的观察切换。
   - 信封字段：`v/kind/name/id/ts_ms/payload/target`，其中 `v = "v5"`，`kind` 为 `action/result/event/error`。
   - Agent action：`agent.register`、`agent.heartbeat`、`command.ack`、`command.result`。
   - Server->Agent event/error：`agent.registered`、`command.dispatch`、`server.error`。
+  - 严格字段要求（v5，Agent->Server）：
+    - `agent.heartbeat.payload.agent_mac` 必填（建议同时附带 `agent_id`）。
+    - `command.ack.payload.agent_mac` 必填（建议同时附带 `agent_id`）。
+    - `command.result.payload.agent_mac` 必填（建议同时附带 `agent_id`）。
+    - 服务端对上述三类 action 不再使用 `session -> agent_mac` 回退推断。
 
 ### 6. 边界与异常处理
 
@@ -223,3 +229,54 @@ owt-agent/application/owt-agent/files/config.ini
 - `OWT_AGENT_ENABLE_NO_FILE_WRITE_CHECKS=ON|OFF`（默认 `ON`）：总开关。
 - `OWT_AGENT_ENABLE_NO_FILE_WRITE_RUNTIME_CHECK=ON|OFF`（默认 `ON`）：运行期 `strace` 验收开关。
 - 当运行期开关为 `ON` 且 `BUILD_TESTING=ON` 时，若环境缺少 `strace`，配置阶段会直接失败。
+
+## Agent 离线快速排查
+
+当“前端显示 Agent 离线，但 `owt-agent` 进程仍在”时，优先沿控制通道（`/ws/v5/agent`）排查，而不是先看 SSH 目标连通性。
+
+- 前端在线状态直接来自服务端 `agent.online`。
+- `register/heartbeat` 会置 `online=true`，控制通道断开会置 `online=false`。
+- `SYN_SENT -> <target>:22` 常见于 SSH 探测/执行链路，不直接决定 Agent 在线状态。
+
+### 一键诊断脚本
+
+1. 服务端（`owt-net` 主机）执行：
+
+```bash
+./owt-net/tools/diagnose-agent-offline.sh [agent_mac]
+```
+
+输出内容包括：
+
+- agents 表 `online/last_seen/last_heartbeat`。
+- `server_core.log` 中 register/heartbeat/session 关键日志。
+- 9080/9081 监听与 nginx `/ws/v5/agent` 路由片段。
+
+2. Agent 侧（OpenWrt）执行：
+
+```bash
+./owt-agent/tools/diagnose-agent-control-channel.sh
+```
+
+输出内容包括：
+
+- `/etc/owt-agent/config.ini` 关键配置。
+- `owt-agent` 进程连接状态与控制通道日志关键字。
+- `connect failed / heartbeat dropped / unsupported protocol` 等异常线索。
+
+### 常见定位结论
+
+1. `online=0` 且 `last_heartbeat_at_ms` 不更新：`register/heartbeat` 未被服务端接受。
+2. 同名或近似 `agent_id` 对应多个 `agent_mac`：`agent_mac=auto` 变化导致前端选中旧条目。
+3. `agent session closing` 频繁出现：控制通道抖动（网络/LB/nginx/后端重启）。
+4. Agent 在线但目标状态离线：转查 SSH 链路（目标主机、22 端口、凭据、探测命令）。
+5. 日志持续出现 `invalid_params: agent_mac is required`：检查 Agent 是否在 `agent.heartbeat` / `command.ack` / `command.result` 的 payload 显式携带 `agent_mac`。
+
+### 严格协议升级顺序（v5）
+
+为避免升级窗口内出现批量离线，默认顺序如下：
+
+1. 先升级 `owt-agent`（确保三类 action payload 显式携带 `agent_mac`）。
+2. 再升级 `owt-net`（启用严格校验并移除会话回退）。
+
+该顺序下，新 Agent + 旧 Server 可工作；旧 Agent + 新 Server 会被严格拒绝（预期行为）。

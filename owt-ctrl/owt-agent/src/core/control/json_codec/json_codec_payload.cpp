@@ -87,7 +87,12 @@ json payload_to_json(message_type type, const payload_variant& payload) {
     }
     case message_type::agent_heartbeat: {
       if (const auto* p = std::get_if<heartbeat_payload>(&payload)) {
-        return {{"heartbeat_at_ms", p->heartbeat_at_ms}, {"stats", p->stats}};
+        return {
+            {"agent_mac", p->agent_mac},
+            {"agent_id", p->agent_id},
+            {"heartbeat_at_ms", p->heartbeat_at_ms},
+            {"stats", p->stats},
+        };
       }
       return json::object();
     }
@@ -100,6 +105,8 @@ json payload_to_json(message_type type, const payload_variant& payload) {
     case message_type::agent_command_ack: {
       if (const auto* p = std::get_if<command_ack_payload>(&payload)) {
         return {
+            {"agent_mac", p->agent_mac},
+            {"agent_id", p->agent_id},
             {"command_id", p->command_id},
             {"status", to_string(p->status)},
             {"message", p->message},
@@ -110,6 +117,8 @@ json payload_to_json(message_type type, const payload_variant& payload) {
     case message_type::agent_command_result: {
       if (const auto* p = std::get_if<command_result_payload>(&payload)) {
         return {
+            {"agent_mac", p->agent_mac},
+            {"agent_id", p->agent_id},
             {"command_id", p->command_id},
             {"final_status", to_string(p->final_status)},
             {"exit_code", p->exit_code},
@@ -195,17 +204,30 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return p;
     }
     case message_type::agent_heartbeat: {
-      if (!reject_unknown_fields(payload, {"heartbeat_at_ms", "stats"}, unknown)) {
+      if (!reject_unknown_fields(payload, {"agent_mac", "agent_id", "heartbeat_at_ms", "stats"}, unknown)) {
         ok = false;
         error = "unknown field in heartbeat payload: " + unknown;
         return std::monostate{};
       }
       heartbeat_payload p;
+      if (!payload.contains("agent_mac") || !payload["agent_mac"].is_string() ||
+          payload["agent_mac"].get<std::string>().empty()) {
+        ok = false;
+        error = "heartbeat.agent_mac is required";
+        return std::monostate{};
+      }
       if (!payload.contains("heartbeat_at_ms") || !payload["heartbeat_at_ms"].is_number_integer()) {
         ok = false;
         error = "heartbeat.heartbeat_at_ms is required";
         return std::monostate{};
       }
+      if (payload.contains("agent_id") && !payload["agent_id"].is_string()) {
+        ok = false;
+        error = "heartbeat.agent_id must be string";
+        return std::monostate{};
+      }
+      p.agent_mac = payload["agent_mac"].get<std::string>();
+      p.agent_id = payload.value("agent_id", std::string{});
       p.heartbeat_at_ms = payload["heartbeat_at_ms"].get<int64_t>();
       if (payload.contains("stats")) {
         if (!payload["stats"].is_object()) {
@@ -236,15 +258,22 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return c;
     }
     case message_type::agent_command_ack: {
-      if (!reject_unknown_fields(payload, {"command_id", "status", "message"}, unknown)) {
+      if (!reject_unknown_fields(payload, {"agent_mac", "agent_id", "command_id", "status", "message"}, unknown)) {
         ok = false;
         error = "unknown field in command_ack payload: " + unknown;
         return std::monostate{};
       }
-      if (!payload.contains("command_id") || !payload["command_id"].is_string() ||
+      if (!payload.contains("agent_mac") || !payload["agent_mac"].is_string() ||
+          payload["agent_mac"].get<std::string>().empty() ||
+          !payload.contains("command_id") || !payload["command_id"].is_string() ||
           !payload.contains("status") || !payload["status"].is_string()) {
         ok = false;
-        error = "command_ack.command_id and status are required";
+        error = "command_ack.agent_mac/command_id/status are required";
+        return std::monostate{};
+      }
+      if (payload.contains("agent_id") && !payload["agent_id"].is_string()) {
+        ok = false;
+        error = "command_ack.agent_id must be string";
         return std::monostate{};
       }
       if (payload.contains("message") && !payload["message"].is_string()) {
@@ -253,6 +282,8 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
         return std::monostate{};
       }
       command_ack_payload p;
+      p.agent_mac = payload["agent_mac"].get<std::string>();
+      p.agent_id = payload.value("agent_id", std::string{});
       p.command_id = payload["command_id"].get<std::string>();
       p.message = payload.value("message", std::string{});
       if (!try_parse_command_status(payload["status"].get<std::string>(), p.status)) {
@@ -263,19 +294,31 @@ payload_variant payload_from_json(message_type type, const json& payload, bool& 
       return p;
     }
     case message_type::agent_command_result: {
-      if (!reject_unknown_fields(payload, {"command_id", "final_status", "exit_code", "result"}, unknown)) {
+      if (!reject_unknown_fields(
+              payload,
+              {"agent_mac", "agent_id", "command_id", "final_status", "exit_code", "result"},
+              unknown)) {
         ok = false;
         error = "unknown field in command_result payload: " + unknown;
         return std::monostate{};
       }
-      if (!payload.contains("command_id") || !payload["command_id"].is_string() ||
+      if (!payload.contains("agent_mac") || !payload["agent_mac"].is_string() ||
+          payload["agent_mac"].get<std::string>().empty() ||
+          !payload.contains("command_id") || !payload["command_id"].is_string() ||
           !payload.contains("final_status") || !payload["final_status"].is_string() ||
           !payload.contains("exit_code") || !payload["exit_code"].is_number_integer()) {
         ok = false;
-        error = "command_result.command_id/final_status/exit_code are required";
+        error = "command_result.agent_mac/command_id/final_status/exit_code are required";
+        return std::monostate{};
+      }
+      if (payload.contains("agent_id") && !payload["agent_id"].is_string()) {
+        ok = false;
+        error = "command_result.agent_id must be string";
         return std::monostate{};
       }
       command_result_payload p;
+      p.agent_mac = payload["agent_mac"].get<std::string>();
+      p.agent_id = payload.value("agent_id", std::string{});
       p.command_id = payload["command_id"].get<std::string>();
       p.exit_code = payload["exit_code"].get<int>();
       p.result = payload.value("result", json::object());

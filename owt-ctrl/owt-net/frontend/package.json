@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "test:contract": "node tests/v5-contract.test.mjs",
-    "test:running-event": "node tests/command-event-running.test.mjs"
+    "test:running-event": "node tests/command-event-running.test.mjs",
+    "test:monitoring-state": "node tests/monitoring-state.test.mjs",
+    "test:command-submit": "node tests/command-submit-single-send.test.mjs"
   },
   "dependencies": {
     "vue": "^3.5.18"

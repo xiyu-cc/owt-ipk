@@ -5,6 +5,11 @@ import AgentPanel from './components/AgentPanel.vue'
 import CommandPanel from './components/CommandPanel.vue'
 import ParamsPanel from './components/ParamsPanel.vue'
 import { useCommandBusSocket } from './composables/useCommandBusSocket'
+import {
+  monitoringEnabledFromStats,
+  monitoringOverrideFromCommandResource,
+  shouldClearMonitoringOverride
+} from './monitoring-state'
 import { COMMAND_BUS_EVENTS, COMMAND_BUS_ACTIONS, WS_UI_PATH } from './protocol/v5'
 
 const DEFAULT_WOL = Object.freeze({
@@ -28,10 +33,10 @@ const bus = useCommandBusSocket(WS_UI_PATH)
 const agents = ref([])
 const selectedAgentMac = ref('')
 const paramsOpen = ref(false)
-const loadingAgents = ref(false)
 const busy = ref(false)
 const lastError = ref('')
 const latestResult = ref(null)
+const monitoringOverride = ref(null)
 
 const wol = ref({ ...DEFAULT_WOL })
 const ssh = ref({ ...DEFAULT_SSH })
@@ -72,13 +77,29 @@ const probeStatusRaw = computed(() => {
   return typeof value === 'string' ? value : 'unknown'
 })
 
+const monitoringEnabledFromHeartbeat = computed(() => {
+  return monitoringEnabledFromStats(probeStats.value)
+})
+
+const effectiveMonitoringEnabled = computed(() => {
+  const override = monitoringOverride.value
+  if (
+    override &&
+    override.agentMac === selectedAgentMac.value &&
+    typeof override.enabled === 'boolean'
+  ) {
+    return override.enabled
+  }
+  return monitoringEnabledFromHeartbeat.value
+})
+
 const monitoringEnabled = computed(() => {
-  return probeStats.value.monitoring_enabled === true
+  return effectiveMonitoringEnabled.value === true
 })
 
 const monitoringStatusText = computed(() => {
-  if (probeStats.value.monitoring_enabled === true) return '采集开启'
-  if (probeStats.value.monitoring_enabled === false) return '采集停止'
+  if (effectiveMonitoringEnabled.value === true) return '采集开启'
+  if (effectiveMonitoringEnabled.value === false) return '采集停止'
   return '采集未知'
 })
 
@@ -271,6 +292,17 @@ function updateLatestResult(resource) {
   }
 }
 
+function setMonitoringOverride(agentMac, enabled) {
+  if (!agentMac || typeof enabled !== 'boolean') return
+  monitoringOverride.value = { agentMac, enabled }
+}
+
+function clearMonitoringOverrideForAgent(agentMac) {
+  if (!agentMac) return
+  if (monitoringOverride.value?.agentMac !== agentMac) return
+  monitoringOverride.value = null
+}
+
 function applyParams(data) {
   const wolData = data?.wol && typeof data.wol === 'object' ? data.wol : {}
   const sshData = data?.ssh && typeof data.ssh === 'object' ? data.ssh : {}
@@ -320,19 +352,6 @@ function wolPayload() {
 function sshPayload() {
   const payload = paramsPayload()
   return payload.ssh
-}
-
-async function refreshAgents() {
-  loadingAgents.value = true
-  try {
-    const res = await bus.call(COMMAND_BUS_ACTIONS.AGENT_LIST, { include_offline: true })
-    normalizeSnapshot(res || {})
-    lastError.value = ''
-  } catch (err) {
-    lastError.value = err instanceof Error ? err.message : String(err)
-  } finally {
-    loadingAgents.value = false
-  }
 }
 
 async function loadParams() {
@@ -408,25 +427,16 @@ async function toggleMonitoring() {
   await submitCommand('monitoring_set', { enabled: nextEnabled })
 }
 
-async function bootstrap() {
-  try {
-    await bus.call(COMMAND_BUS_ACTIONS.SESSION_SUBSCRIBE, { scope: 'all' })
-  } catch (_) {
-    // ignore
-  }
-  await refreshAgents()
-}
-
-const offOpen = bus.on('__open__', () => {
-  void bootstrap()
-})
-
 const offSnapshot = bus.on(COMMAND_BUS_EVENTS.AGENT_SNAPSHOT, (params) => {
   normalizeSnapshot(params?.resource || {})
 })
 
 const offAgent = bus.on(COMMAND_BUS_EVENTS.AGENT_UPDATE, (params) => {
   upsertAgent(params?.resource)
+  const overrideAgentMac = monitoringOverride.value?.agentMac || ''
+  if (shouldClearMonitoringOverride(params, overrideAgentMac)) {
+    clearMonitoringOverrideForAgent(overrideAgentMac)
+  }
 })
 
 const offCommand = bus.on(COMMAND_BUS_EVENTS.COMMAND_EVENT, (params) => {
@@ -438,6 +448,11 @@ const offCommand = bus.on(COMMAND_BUS_EVENTS.COMMAND_EVENT, (params) => {
 
   if (!isTerminalStatus(resource?.event?.status)) {
     return
+  }
+
+  const override = monitoringOverrideFromCommandResource(resource)
+  if (override) {
+    setMonitoringOverride(override.agentMac, override.enabled)
   }
 
   updateLatestResult(resource)
@@ -462,7 +477,6 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  offOpen()
   offSnapshot()
   offAgent()
   offCommand()
@@ -478,8 +492,6 @@ onUnmounted(() => {
     <section class="card title-bar">
       <p class="kicker">OWT LAN CONTROL</p>
       <h1>局域网设备控制中心</h1>
-      <p class="sub">Command Bus v5 控制台，使用稳定版视觉与布局。</p>
-      <p class="chip">ws: {{ bus.connected ? 'connected' : 'disconnected' }}</p>
     </section>
 
     <section class="card controls">
@@ -487,9 +499,7 @@ onUnmounted(() => {
       <AgentPanel
         v-model:selectedAgentMac="selectedAgentMac"
         :agents="agents"
-        :connected="bus.connected"
-        :loading="loadingAgents || busy"
-        @refresh="refreshAgents"
+        :loading="busy"
       />
       <CommandPanel
         :busy="busy"

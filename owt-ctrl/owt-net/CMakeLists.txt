@@ -72,6 +72,7 @@ add_executable(${OWT_CTRL_TEST_TARGET}
   tests/ctrl_tests.cpp
   ${OWT_CTRL_COMMON_SOURCES}
   src/app/bootstrap/runtime/session_runtime.cpp
+  src/app/bootstrap/runtime/agent_action_gateway.cpp
   src/app/presenter/serializers.cpp
   src/app/ws/command_bus_protocol.cpp
   src/app/ws/scheduler/event_scheduler.cpp

@@ -1,6 +1,7 @@
 #include "app/ws/command_bus_protocol.h"
 #include "app/presenter/serializers.h"
 #include "app/ws/scheduler/event_scheduler.h"
+#include "app/bootstrap/runtime/agent_action_gateway.h"
 #include "ctrl/adapters/control_ws_use_cases.h"
 #include "ctrl/infrastructure/sqlite_store.h"
 #include "ctrl/domain/types.h"
@@ -666,6 +667,88 @@ public:
   uint64_t command_timed_out_total_ = 0;
 };
 
+class fake_ws_connection final : public drogon::WebSocketConnection {
+public:
+  void send(
+      const char* msg,
+      uint64_t len,
+      const drogon::WebSocketMessageType type = drogon::WebSocketMessageType::Text) override {
+    if (type != drogon::WebSocketMessageType::Text || msg == nullptr) {
+      return;
+    }
+    std::lock_guard<std::mutex> lk(mutex_);
+    sent_messages_.emplace_back(msg, static_cast<size_t>(len));
+  }
+
+  void send(
+      std::string_view msg,
+      const drogon::WebSocketMessageType type = drogon::WebSocketMessageType::Text) override {
+    if (type != drogon::WebSocketMessageType::Text) {
+      return;
+    }
+    std::lock_guard<std::mutex> lk(mutex_);
+    sent_messages_.emplace_back(msg);
+  }
+
+  void sendJson(
+      const Json::Value& json,
+      const drogon::WebSocketMessageType type = drogon::WebSocketMessageType::Text) override {
+    if (type != drogon::WebSocketMessageType::Text) {
+      return;
+    }
+    send(json.toStyledString(), type);
+  }
+
+  const trantor::InetAddress& localAddr() const override {
+    return local_addr_;
+  }
+
+  const trantor::InetAddress& peerAddr() const override {
+    return peer_addr_;
+  }
+
+  bool connected() const override {
+    return connected_;
+  }
+
+  bool disconnected() const override {
+    return !connected_;
+  }
+
+  void shutdown(
+      const drogon::CloseCode code = drogon::CloseCode::kNormalClosure,
+      const std::string& reason = "") override {
+    (void)code;
+    (void)reason;
+    connected_ = false;
+  }
+
+  void forceClose() override {
+    connected_ = false;
+  }
+
+  void setPingMessage(
+      const std::string& message,
+      const std::chrono::duration<double>& interval) override {
+    (void)message;
+    (void)interval;
+  }
+
+  void disablePing() override {}
+
+  std::vector<std::string> sent_messages_snapshot() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return sent_messages_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  bool connected_ = true;
+  trantor::InetAddress local_addr_{"127.0.0.1", static_cast<uint16_t>(19081)};
+  trantor::InetAddress peer_addr_{"127.0.0.1", static_cast<uint16_t>(19082)};
+  std::vector<std::string> sent_messages_;
+};
+
 void test_command_orchestrator_submit() {
   test_clock clock;
   clock.set(1000);
@@ -1087,13 +1170,13 @@ void test_command_bus_envelope_v5_codec() {
   require(out.target == "AA:00:00:00:10:01", "decoded target mismatch");
 
   const auto result_text = app::ws::bus_result(
-      owt::protocol::v5::ui::kActionAgentList,
+      owt::protocol::v5::ui::kActionCommandSubmit,
       "req-2",
       222,
       nlohmann::json{{"ok", true}});
   auto result_json = nlohmann::json::parse(result_text, nullptr, false);
   require(result_json["kind"] == "result", "bus_result kind mismatch");
-  require(result_json["name"] == owt::protocol::v5::ui::kActionAgentList, "bus_result name mismatch");
+  require(result_json["name"] == owt::protocol::v5::ui::kActionCommandSubmit, "bus_result name mismatch");
 
   const auto error_text = app::ws::bus_error(
       owt::protocol::v5::ui::kActionParamsUpdate,
@@ -1110,7 +1193,7 @@ void test_command_bus_envelope_v5_codec() {
   app::ws::BusEnvelope ignored;
   require(
       !app::ws::parse_bus_envelope(
-          R"({"v":"v5","kind":"action","name":"agent.list","id":"1","ts_ms":1,"payload":{},"x":1})",
+          R"({"v":"v5","kind":"action","name":"session.subscribe","id":"1","ts_ms":1,"payload":{},"x":1})",
           ignored,
           invalid_error),
       "unknown envelope field should fail");
@@ -1222,6 +1305,181 @@ void test_control_ws_use_cases_v5_contract() {
   require(
       registry.get_agent("AA:00:00:00:50:01", agent) && !agent.online,
       "ws close should set agent offline");
+}
+
+struct agent_action_gateway_fixture {
+  test_clock clock;
+  in_memory_command_repository command_repo;
+  in_memory_agent_repository agent_repo;
+  fake_status_publisher publisher;
+  fake_metrics metrics;
+  ctrl::application::AgentRegistryService registry;
+  ctrl::application::AgentMessageService message_service;
+  ctrl::adapters::ControlWsUseCases ws_use_cases;
+  ctrl::application::RedactionService redaction;
+  app::bootstrap::runtime::AgentSessionRegistry sessions;
+  app::bootstrap::runtime::AgentActionGateway gateway;
+
+  agent_action_gateway_fixture()
+      : registry(agent_repo, clock),
+        message_service(command_repo, registry, publisher, metrics, clock),
+        ws_use_cases(registry, message_service),
+        gateway(
+            sessions,
+            ws_use_cases,
+            redaction,
+            clock,
+            []() { return std::string("trace-gateway-test"); }) {
+    clock.set(10000);
+  }
+};
+
+void test_agent_action_gateway_requires_payload_agent_mac_for_strict_actions() {
+  const std::vector<std::pair<std::string, nlohmann::json>> cases = {
+      {
+          std::string(owt::protocol::v5::agent::kActionAgentHeartbeat),
+          nlohmann::json{
+              {"heartbeat_at_ms", 10001},
+              {"stats", {{"cpu", 8}}},
+          },
+      },
+      {
+          std::string(owt::protocol::v5::agent::kActionCommandAck),
+          nlohmann::json{
+              {"command_id", "cmd-gateway-ack"},
+              {"status", "acked"},
+              {"message", "accepted"},
+          },
+      },
+      {
+          std::string(owt::protocol::v5::agent::kActionCommandResult),
+          nlohmann::json{
+              {"command_id", "cmd-gateway-result"},
+              {"final_status", "succeeded"},
+              {"exit_code", 0},
+              {"result", {{"ok", true}}},
+          },
+      },
+  };
+
+  for (size_t idx = 0; idx < cases.size(); ++idx) {
+    agent_action_gateway_fixture fixture;
+    auto conn = std::make_shared<fake_ws_connection>();
+    const auto session_id = "sess-gateway-missing-mac-" + std::to_string(idx);
+    fixture.sessions.add_connection(session_id, conn);
+
+    app::ws::BusEnvelope req;
+    req.version = std::string(owt::protocol::v5::kProtocol);
+    req.kind = std::string(owt::protocol::v5::kind::kAction);
+    req.name = cases[idx].first;
+    req.id = "req-missing-mac-" + std::to_string(idx);
+    req.ts_ms = fixture.clock.now_ms();
+    req.payload = cases[idx].second;
+
+    fixture.gateway.handle(conn, session_id, req);
+
+    const auto sent = conn->sent_messages_snapshot();
+    require(sent.size() == 1, "missing agent_mac should return one error envelope");
+
+    app::ws::BusEnvelope out;
+    std::string parse_error;
+    require(
+        app::ws::parse_bus_envelope(sent.front(), out, parse_error),
+        "gateway error envelope should parse");
+    require(out.kind == owt::protocol::v5::kind::kError, "missing agent_mac should return kind=error");
+    require(
+        out.name == owt::protocol::v5::agent::kErrorServerError,
+        "missing agent_mac should return server.error");
+    require(
+        out.payload.value("code", std::string{}) == owt::protocol::v5::error_code::kInvalidParams,
+        "missing agent_mac should return invalid_params");
+    require(
+        out.payload.value("message", std::string{}) == "agent_mac is required",
+        "missing agent_mac should return required message");
+  }
+}
+
+void test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions() {
+  agent_action_gateway_fixture fixture;
+  auto conn = std::make_shared<fake_ws_connection>();
+  const std::string session_id = "sess-gateway-strict-ok";
+  fixture.sessions.add_connection(session_id, conn);
+
+  app::ws::BusEnvelope heartbeat;
+  heartbeat.version = std::string(owt::protocol::v5::kProtocol);
+  heartbeat.kind = std::string(owt::protocol::v5::kind::kAction);
+  heartbeat.name = std::string(owt::protocol::v5::agent::kActionAgentHeartbeat);
+  heartbeat.id = "req-strict-heartbeat";
+  heartbeat.ts_ms = fixture.clock.now_ms();
+  heartbeat.payload = nlohmann::json{
+      {"agent_mac", "AA:00:00:00:60:01"},
+      {"agent_id", "agent-60-01"},
+      {"heartbeat_at_ms", fixture.clock.now_ms()},
+      {"stats", {{"cpu", 9}}},
+  };
+  fixture.gateway.handle(conn, session_id, heartbeat);
+
+  ctrl::domain::AgentState state;
+  require(
+      fixture.registry.get_agent("AA:00:00:00:60:01", state),
+      "heartbeat with explicit agent_mac should update agent state");
+  require(state.stats["cpu"] == 9, "heartbeat stats should be persisted");
+
+  ctrl::domain::CommandSnapshot seeded;
+  seeded.spec.command_id = "cmd-gateway-strict";
+  seeded.spec.trace_id = "trc-gateway-strict";
+  seeded.spec.kind = ctrl::domain::CommandKind::HostReboot;
+  seeded.agent = {"AA:00:00:00:60:01", "agent-60-01"};
+  seeded.state = ctrl::domain::CommandState::Dispatched;
+  seeded.created_at_ms = fixture.clock.now_ms();
+  seeded.updated_at_ms = fixture.clock.now_ms();
+  std::string error;
+  require(fixture.command_repo.upsert(seeded, error), "seed command for gateway strict flow should succeed");
+
+  app::ws::BusEnvelope ack;
+  ack.version = std::string(owt::protocol::v5::kProtocol);
+  ack.kind = std::string(owt::protocol::v5::kind::kAction);
+  ack.name = std::string(owt::protocol::v5::agent::kActionCommandAck);
+  ack.id = "req-strict-ack";
+  ack.ts_ms = fixture.clock.now_ms();
+  ack.payload = nlohmann::json{
+      {"agent_mac", "AA:00:00:00:60:01"},
+      {"agent_id", "agent-60-01"},
+      {"command_id", "cmd-gateway-strict"},
+      {"status", "acked"},
+      {"message", "accepted"},
+  };
+  fixture.gateway.handle(conn, session_id, ack);
+
+  app::ws::BusEnvelope result;
+  result.version = std::string(owt::protocol::v5::kProtocol);
+  result.kind = std::string(owt::protocol::v5::kind::kAction);
+  result.name = std::string(owt::protocol::v5::agent::kActionCommandResult);
+  result.id = "req-strict-result";
+  result.ts_ms = fixture.clock.now_ms();
+  result.payload = nlohmann::json{
+      {"agent_mac", "AA:00:00:00:60:01"},
+      {"agent_id", "agent-60-01"},
+      {"command_id", "cmd-gateway-strict"},
+      {"final_status", "succeeded"},
+      {"exit_code", 0},
+      {"result", {{"ok", true}, {"source", "gateway-test"}}},
+  };
+  fixture.gateway.handle(conn, session_id, result);
+
+  const auto sent = conn->sent_messages_snapshot();
+  require(sent.empty(), "strict valid heartbeat/ack/result should not emit server.error");
+
+  ctrl::domain::CommandSnapshot loaded;
+  require(
+      fixture.command_repo.get("cmd-gateway-strict", loaded, error),
+      "gateway strict command should be readable");
+  require(
+      loaded.state == ctrl::domain::CommandState::Succeeded,
+      "gateway strict command should reach terminal state");
+  require(
+      loaded.result == nlohmann::json{{"ok", true}, {"source", "gateway-test"}},
+      "gateway strict command should persist payload.result");
 }
 
 void test_sqlite_store_repository() {
@@ -1564,6 +1822,8 @@ int main() {
     test_params_rate_limiter_redaction();
     test_presenter_command_redaction();
     test_control_ws_use_cases_v5_contract();
+    test_agent_action_gateway_requires_payload_agent_mac_for_strict_actions();
+    test_agent_action_gateway_accepts_explicit_agent_mac_for_strict_actions();
     test_sqlite_store_repository();
     test_startup_mark_all_agents_offline();
     test_sqlite_store_legacy_backup_and_rebuild();

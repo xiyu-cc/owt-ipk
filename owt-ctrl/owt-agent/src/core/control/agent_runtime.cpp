@@ -217,7 +217,11 @@ bool agent_runtime::send_heartbeat() {
   return send_control_message(
       message_type::agent_heartbeat,
       make_message_id(),
-      heartbeat_payload{unix_time_ms_now(), heartbeat_builder_.build_stats()});
+      heartbeat_payload{
+          options_.agent_mac,
+          options_.agent_id,
+          unix_time_ms_now(),
+          heartbeat_builder_.build_stats()});
 }
 
 bool agent_runtime::send_command_ack(
@@ -228,7 +232,12 @@ bool agent_runtime::send_command_ack(
   return send_control_message(
       message_type::agent_command_ack,
       request_id,
-      command_ack_payload{command_id, status, std::string(message)});
+      command_ack_payload{
+          options_.agent_mac,
+          options_.agent_id,
+          command_id,
+          status,
+          std::string(message)});
 }
 
 channel_callbacks agent_runtime::build_callbacks(const std::string& endpoint) {
@@ -493,7 +502,13 @@ bool agent_runtime::send_command_result(
   return send_control_message(
       message_type::agent_command_result,
       request_id,
-      command_result_payload{command_id, final_status, exit_code, result});
+      command_result_payload{
+          options_.agent_mac,
+          options_.agent_id,
+          command_id,
+          final_status,
+          exit_code,
+          result});
 }
 
 void agent_runtime::enqueue_command(const nlohmann::json& request_id, const command& cmd) {

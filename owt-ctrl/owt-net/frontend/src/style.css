@@ -78,23 +78,6 @@ h1 {
   line-height: 1.05;
 }
 
-.sub {
-  margin: 0 0 12px;
-  color: var(--muted);
-  max-width: 640px;
-}
-
-.chip {
-  margin: 0;
-  width: fit-content;
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(102, 167, 231, 0.45);
-  background: rgba(7, 19, 35, 0.7);
-  color: #c9def8;
-  font-size: 13px;
-}
-
 .card {
   background: var(--card);
   border: 1px solid var(--line);
@@ -160,20 +143,14 @@ h2 {
 
 .agent-row {
   display: grid;
-  grid-template-columns: 92px 1fr auto;
+  grid-template-columns: 92px 1fr;
   gap: 10px;
   align-items: center;
-  margin-bottom: 12px;
 }
 
 .agent-row label {
   color: #bfd0e7;
   font-size: 13px;
-}
-
-.agent-refresh {
-  margin-top: 0;
-  height: 40px;
 }
 
 .control-btn {

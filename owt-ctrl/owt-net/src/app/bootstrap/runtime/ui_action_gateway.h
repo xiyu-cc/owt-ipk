@@ -64,10 +64,6 @@ private:
       const std::string& session_id,
       const std::string& actor_id,
       const ws::BusEnvelope& req);
-  void handle_agent_list(
-      const std::string& session_id,
-      const std::string& actor_id,
-      const ws::BusEnvelope& req);
   void handle_params_get(
       const std::string& session_id,
       const std::string& actor_id,

@@ -2,11 +2,10 @@
 const props = defineProps({
   agents: { type: Array, required: true },
   selectedAgentMac: { type: String, default: '' },
-  connected: { type: Boolean, default: false },
   loading: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['update:selectedAgentMac', 'refresh'])
+const emit = defineEmits(['update:selectedAgentMac'])
 
 function onSelect(event) {
   emit('update:selectedAgentMac', event.target.value)
@@ -28,10 +27,8 @@ function onSelect(event) {
           {{ item.agent_id || item.agent_mac }} · {{ item.online ? '在线' : '离线' }}
         </option>
       </select>
-      <button class="ghost agent-refresh" type="button" @click="emit('refresh')" :disabled="props.loading">刷新</button>
     </div>
 
     <p v-if="!props.agents.length" class="hint">暂无 Agent，可先启动 `owt-agent` 并完成 REGISTER。</p>
-    <p v-else class="hint">ws: {{ props.connected ? 'connected' : 'disconnected' }}</p>
   </div>
 </template>

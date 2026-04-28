@@ -313,6 +313,8 @@ control::envelope make_ack_envelope(
   out.ts_ms = now_ms;
   out.target = agent_mac;
   out.payload = control::command_ack_payload{
+      agent_mac,
+      "agent-reconnect",
       command_id,
       control::command_status::acked,
       "accepted"};
@@ -331,6 +333,8 @@ control::envelope make_result_envelope(
   out.ts_ms = now_ms;
   out.target = agent_mac;
   out.payload = control::command_result_payload{
+      agent_mac,
+      "agent-reconnect",
       command_id,
       control::command_status::succeeded,
       0,
@@ -348,7 +352,11 @@ control::envelope make_heartbeat_envelope(
   out.id = request_id;
   out.ts_ms = now_ms;
   out.target = agent_mac;
-  out.payload = control::heartbeat_payload{now_ms, nlohmann::json{{"cpu", 5}}};
+  out.payload = control::heartbeat_payload{
+      agent_mac,
+      "agent-reconnect",
+      now_ms,
+      nlohmann::json{{"cpu", 5}}};
   return out;
 }
 
@@ -410,14 +418,20 @@ void test_ack_running_result_sequence() {
 
   const auto* ack1 = std::get_if<control::command_ack_payload>(&sent[0].payload);
   require(ack1 != nullptr, "first outbound payload should be command_ack_payload");
+  require(ack1->agent_mac == options.agent_mac, "first ack should carry agent_mac");
+  require(ack1->agent_id == options.agent_id, "first ack should carry agent_id");
   require(ack1->status == control::command_status::acked, "first ack should be ACKED");
 
   const auto* ack2 = std::get_if<control::command_ack_payload>(&sent[1].payload);
   require(ack2 != nullptr, "second outbound payload should be command_ack_payload");
+  require(ack2->agent_mac == options.agent_mac, "second ack should carry agent_mac");
+  require(ack2->agent_id == options.agent_id, "second ack should carry agent_id");
   require(ack2->status == control::command_status::running, "second ack should be RUNNING");
 
   const auto* result = std::get_if<control::command_result_payload>(&sent[2].payload);
   require(result != nullptr, "third outbound payload should be command_result_payload");
+  require(result->agent_mac == options.agent_mac, "result should carry agent_mac");
+  require(result->agent_id == options.agent_id, "result should carry agent_id");
   require(result->final_status == control::command_status::succeeded, "final status should be SUCCEEDED");
 
   raw_channel->emit_message(dispatch);
@@ -432,6 +446,8 @@ void test_ack_running_result_sequence() {
   require(after_duplicate.size() == 4, "duplicate dispatch should only produce one extra ACKED message");
   const auto* dup_ack = std::get_if<control::command_ack_payload>(&after_duplicate[3].payload);
   require(dup_ack != nullptr, "duplicate outbound payload should be command_ack_payload");
+  require(dup_ack->agent_mac == options.agent_mac, "duplicate ack should carry agent_mac");
+  require(dup_ack->agent_id == options.agent_id, "duplicate ack should carry agent_id");
   require(dup_ack->status == control::command_status::acked, "duplicate command should only emit ACKED");
 
   runtime.stop();

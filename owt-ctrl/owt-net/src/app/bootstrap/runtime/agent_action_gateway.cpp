@@ -1,12 +1,50 @@
 #include "app/bootstrap/runtime/agent_action_gateway.h"
 
+#include "app/runtime_log.h"
 #include "app/ws/command_bus_protocol.h"
 #include "owt/protocol/v5/contract.h"
 
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace app::bootstrap::runtime {
+
+namespace {
+
+std::string request_id_to_text(const nlohmann::json& request_id) {
+  if (request_id.is_null()) {
+    return "";
+  }
+  if (request_id.is_string()) {
+    return request_id.get<std::string>();
+  }
+  if (request_id.is_number_integer()) {
+    return std::to_string(request_id.get<int64_t>());
+  }
+  if (request_id.is_number_unsigned()) {
+    return std::to_string(request_id.get<uint64_t>());
+  }
+  return request_id.dump();
+}
+
+std::string require_payload_agent_mac(
+    const ws::BusEnvelope& req,
+    const std::string& session_id,
+    std::string_view action_name) {
+  if (!req.payload.contains("agent_mac") || !req.payload["agent_mac"].is_string() ||
+      req.payload["agent_mac"].get<std::string>().empty()) {
+    log::warn(
+        "reject agent action: action={}, session_id={}, req_id={}, reason=missing payload.agent_mac",
+        action_name,
+        session_id,
+        request_id_to_text(req.id));
+    throw std::invalid_argument("agent_mac is required");
+  }
+  return req.payload["agent_mac"].get<std::string>();
+}
+
+} // namespace
 
 AgentActionGateway::AgentActionGateway(
     AgentSessionRegistry& agent_sessions,
@@ -106,13 +144,7 @@ void AgentActionGateway::handle_heartbeat(
     const std::string& session_id,
     const ws::BusEnvelope& req) {
   (void)conn;
-  auto agent_mac = req.payload.value("agent_mac", std::string{});
-  if (agent_mac.empty()) {
-    agent_mac = agent_sessions_.find_agent_for_session(session_id);
-  }
-  if (agent_mac.empty()) {
-    throw std::invalid_argument("agent_mac is required");
-  }
+  const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionAgentHeartbeat);
 
   const int64_t heartbeat_at_ms =
       (req.payload.contains("heartbeat_at_ms") && req.payload["heartbeat_at_ms"].is_number_integer())
@@ -142,11 +174,8 @@ void AgentActionGateway::handle_command_ack(
     const std::string& session_id,
     const ws::BusEnvelope& req) {
   (void)conn;
-  auto agent_mac = req.payload.value("agent_mac", std::string{});
-  if (agent_mac.empty()) {
-    agent_mac = agent_sessions_.find_agent_for_session(session_id);
-  }
-  if (agent_mac.empty() || !req.payload.contains("command_id") || !req.payload["command_id"].is_string() ||
+  const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionCommandAck);
+  if (!req.payload.contains("command_id") || !req.payload["command_id"].is_string() ||
       req.payload["command_id"].get<std::string>().empty() || !req.payload.contains("status") ||
       !req.payload["status"].is_string()) {
     throw std::invalid_argument("invalid command.ack payload");
@@ -176,11 +205,8 @@ void AgentActionGateway::handle_command_result(
     const std::string& session_id,
     const ws::BusEnvelope& req) {
   (void)conn;
-  auto agent_mac = req.payload.value("agent_mac", std::string{});
-  if (agent_mac.empty()) {
-    agent_mac = agent_sessions_.find_agent_for_session(session_id);
-  }
-  if (agent_mac.empty() || !req.payload.contains("command_id") || !req.payload["command_id"].is_string() ||
+  const auto agent_mac = require_payload_agent_mac(req, session_id, owt::protocol::v5::agent::kActionCommandResult);
+  if (!req.payload.contains("command_id") || !req.payload["command_id"].is_string() ||
       req.payload["command_id"].get<std::string>().empty() || !req.payload.contains("final_status") ||
       !req.payload["final_status"].is_string() || !req.payload.contains("exit_code") ||
       !req.payload["exit_code"].is_number_integer() || !req.payload.contains("result") ||
