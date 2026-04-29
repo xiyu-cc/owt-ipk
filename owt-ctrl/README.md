@@ -184,6 +184,30 @@
 OPENWRT_SDK_DIR=/path/to/openwrt-sdk-xxx ./build-release.sh
 ```
 
+## owt-agent 安装与依赖级联（在线 feed）
+
+推荐在设备侧使用在线 feed 安装，以便 `opkg` 自动解析并级联安装 `owt-agent` 依赖库：
+
+```bash
+opkg update
+opkg install owt-agent
+```
+
+前置条件：
+
+- 设备网络可访问已配置的软件源。
+- `distfeeds` 已启用 `base` 与 `packages` feed（`libwebsockets-openssl`、`libssh2` 来自 `packages`）。
+
+快速核验：
+
+```bash
+opkg info owt-agent
+opkg status owt-agent
+opkg list-installed | grep -E 'owt-agent|libwebsockets|libssh2|libopenssl|libstdcpp'
+```
+
+说明：若仅安装单个本地 `ipk` 文件且设备未配置可用 feed，`opkg` 不能自动下载缺失依赖。
+
 ## owt-agent SSH 构建策略
 
 - `owt-agent` 提供两个 CMake 开关：
