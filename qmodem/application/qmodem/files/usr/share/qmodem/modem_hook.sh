@@ -32,18 +32,18 @@ _execute_ats(){
 . /usr/share/qmodem/modem_util.sh
 config_load ${config_name}
 
-config_get ${cfg_prefix}_delay $config_section delay
+config_get delay "$config_section" "${cfg_prefix}_delay"
 
-config_get at_port $config_section  at_port
+config_get at_port "$config_section" at_port
 
-if [ -f "$at_port" ] || [ -z "$at_port" ]; then
-    m_debug "$config_section:at_port is not set or not a file"
+if [ -z "$at_port" ] || [ ! -e "$at_port" ]; then
+    m_debug "$config_section:at_port is not set or missing"
     m_debug "at_port $config_section: $at_port"
     exit 1
 fi
 
-if [ -n "$delay"  ]; then
-    sleep $delay
+if [ -n "$delay" ]; then
+    sleep "$delay"
 fi
 
 

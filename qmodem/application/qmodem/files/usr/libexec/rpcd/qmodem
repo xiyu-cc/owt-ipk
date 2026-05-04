@@ -617,7 +617,6 @@ EOF
                 ;;
                 
             delete_sms)
-                read -r input
                 index=$(echo "$input" | jsonfilter -e '@.index')
                 
                 # Source helper functions and get configuration
@@ -689,7 +688,6 @@ EOF
                 ;;
                 
             send_raw_pdu)
-                read -r input
                 cmd=$(echo "$input" | jsonfilter -e '@.cmd')
                 
                 # Source helper functions and get configuration
@@ -713,7 +711,6 @@ EOF
                 ;;
                 
             send_sms)
-                read -r input
                 params=$(echo "$input" | jsonfilter -e '@.params')
                 phone_number=$(echo "$params" | jq -r '.phone_number')
                 message_content=$(echo "$params" | jq -r '.message_content')

@@ -76,7 +76,7 @@ unlock_sim()
     pin=$1
     sim_lock_file="/var/run/qmodem/${modem_config}_dir/pincode"
     lock ${sim_lock_file}.lock
-    if [ -f $sim_lock_file ] && [ "$pin" == "$(cat $sim_lock_file)"];then
+    if [ -f "$sim_lock_file" ] && [ "$pin" = "$(cat "$sim_lock_file")" ]; then
         m_debug "pin code is already try"
     else
         
@@ -141,7 +141,7 @@ update_config()
     config_get pdp_index $modem_config pdp_index
     [ -n "$pdp_index" ] && userset_pdp_index="1" || userset_pdp_index="0"
     config_get suggest_pdp_index $modem_config suggest_pdp_index
-    [ -z "$suggest_pdp_index"] && suggest_pdp_index=$(get_platform_suggest_pdp_index)
+    [ -z "$suggest_pdp_index" ] && suggest_pdp_index=$(get_platform_suggest_pdp_index)
     [ -z "$pdp_index" ] && pdp_index=$suggest_pdp_index
     config_get ra_master $modem_config ra_master
     config_get extend_prefix $modem_config extend_prefix
@@ -155,6 +155,7 @@ update_config()
     config_foreach get_associate_ethernet_by_path modem-slot
     modem_slot=$(basename $modem_path)
     config_get alias $modem_config alias
+    vendor="$manufacturer"
     driver=$(get_driver)
     update_sim_slot
     case $sim_slot in
@@ -175,7 +176,7 @@ update_config()
         [ -z "$username" ] && config_get username $modem_config username
         [ -z "$password" ] && config_get password $modem_config password
         [ -z "$auth" ] && config_get auth $modem_config auth
-        [ -z "$pin" ] && config_get pincode $modem_config pincode
+        [ -z "$pincode" ] && config_get pincode $modem_config pincode
         ;;
         *)
             config_get apn $modem_config apn
@@ -333,7 +334,7 @@ append_to_fw_zone()
 
 set_if()
 {
-    fw_reload_flag=0
+    firewall_reload_flag=0
     dhcp_reload_flag=0
     network_reload_flag=0
     #check if exist
@@ -378,7 +379,7 @@ set_if()
     interface=$(uci -q get network.$interface_name)
     interfacev6=$(uci -q get network.$interface6_name)
     if [ "$env4" -eq 1 ];then
-        if [ -z "$inetrface" ];then
+        if [ -z "$interface" ];then
             uci set network.${interface_name}=interface
             uci set network.${interface_name}.modem_config="${modem_config}"
             uci set network.${interface_name}.proto="${proto}"
@@ -488,7 +489,7 @@ set_if()
         m_debug "no netcard found"
     fi
     ethernet_check=$(handle_5gethernet)
-    if [ -n "$ethernet_check" ] && [ -n "/sys/class/net/$ethernet_5g" ] && [ -n "$ethernet_5g" ];then
+    if [ -n "$ethernet_check" ] && [ -n "$ethernet_5g" ] && [ -d "/sys/class/net/$ethernet_5g" ];then
         set_modem_netcard=$ethernet_5g
     fi
     #set led
@@ -1191,6 +1192,7 @@ case "$2" in
         update_config
         hang;;
     "dial")
+        update_config
         case "$state" in
             "disabled")
                 debug_subject="modem_hang"

@@ -1,7 +1,7 @@
 #!/bin/sh
 # Copyright (C) 2024 Tom <fjrcn@outlook.com>
 manual=$(uci -q get qmodem.main.block_auto_probe)
-[ "${manual}" -eq 1 ] && exit
+[ "${manual}" = "1" ] && exit
 
 logger -t modem_hotplug "net slot: ${DEVPATH} action: ${ACTION}"
 #网络设备名称不存在，退出
@@ -12,14 +12,19 @@ logger -t modem_hotplug "net slot: ${DEVPATH} action: ${ACTION}"
 slot_path=$(readlink -f "/sys/${DEVPATH}/device")
 [ -z "${slot_path}" ] && exit
 
-slot=$(basename "$(dirname "${slot_path}")")
-
-if [ -d "/sys/bus/usb/devices/${slot}" ]; then
-    slot_type="usb"
-elif [ -d "/sys/bus/pci/devices/${slot}" ]; then
+pcie_slot=$(echo "$slot_path" | tr '/' '\n' | grep -E '^[0-9a-fA-F]{4}:[0-9a-fA-F:.]+$' | tail -n1)
+if [ -n "$pcie_slot" ] && [ -d "/sys/bus/pci/devices/${pcie_slot}" ]; then
+    slot="$pcie_slot"
     slot_type="pcie"
 else
-    exit
+    slot=$(basename "$(dirname "${slot_path}")")
+    if [ -d "/sys/bus/usb/devices/${slot}" ]; then
+        slot_type="usb"
+    elif [ -d "/sys/bus/pci/devices/${slot}" ]; then
+        slot_type="pcie"
+    else
+        exit
+    fi
 fi
 
 if [ "${slot_type}" = "usb" ]; then

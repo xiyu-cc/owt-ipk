@@ -536,7 +536,7 @@ set qmodem.$section_name.name=$modem_name
 set qmodem.$section_name.network=$net_devices
 set qmodem.$section_name.manufacturer=$manufacturer
 set qmodem.$section_name.platform=$platform
-set qmodem.$section_name.suggest_pdp_index=$pdp_index
+set qmodem.$section_name.suggest_pdp_index=$suggest_pdp_index
 EOF
 
     [ -n "$wcdma_available_band" ] && uci -q set qmodem.$section_name.wcdma_band=$wcdma_available_band
