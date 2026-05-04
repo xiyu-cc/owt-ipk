@@ -762,7 +762,7 @@ cell_info()
                 if [ -n "$wcdma_phych" ]; then
                     add_plain_info_entry "Physical Channel" "$wcdma_phych" "Physical Channel"
                     add_plain_info_entry "Spreading Factor" "$wcdma_sf" "Spreading Factor"
-                    add_plain_info_entry "Slot" "$wcdma_slot" "Slot"
+                    add_plain_info_entry "Slot" "$wcdma_slot" "Time Slot"
                     add_plain_info_entry "Compression Mode" "$wcdma_com_mod" "Compression Mode"
                 fi
                 ;;

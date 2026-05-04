@@ -768,5 +768,5 @@ cell_info()
     add_bar_info_entry "RSRP" "$rsrp" "Reference Signal Received Power" -140 -44 dBm
     add_bar_info_entry "RSRQ" "$rsrq" "Reference Signal Received Quality" -19.5 -3 dB
     add_bar_info_entry "RSSI" "$rssi" "Received Signal Strength Indicator" -120 -20 dBm
-    add_bar_info_entry "SINR" "$sinr" "Signal to Interference plus Noise Ratio Bandwidth" 0 30 dB
+    add_bar_info_entry "SINR" "$sinr" "Signal to Interference plus Noise Ratio" 0 30 dB
 }

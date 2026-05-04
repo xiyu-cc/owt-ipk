@@ -282,6 +282,10 @@ msgstr ""
 msgid "Band"
 msgstr ""
 
+#: generic.sh:14
+msgid "Frequency Band"
+msgstr ""
+
 #: generic.sh:263
 msgid "Band (CA)"
 msgstr ""
@@ -2869,6 +2873,13 @@ msgstr ""
 
 #: qmodem/sms.js:212
 msgid "Thursday"
+msgstr ""
+
+#: vendor/fibocom.sh:1470
+#: vendor/huawei.sh:586
+#: vendor/neoway.sh:765
+#: vendor/quectel.sh:1868
+msgid "Time Slot"
 msgstr ""
 
 #: view/qmodem/sms.js:334

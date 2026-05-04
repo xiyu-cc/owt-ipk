@@ -1467,9 +1467,48 @@ cell_info()
         add_plain_info_entry "Ec/No" "$wcdma_ecno" "Ec/No"
         add_plain_info_entry "Physical Channel" "$wcdma_phych" "Physical Channel"
         add_plain_info_entry "Spreading Factor" "$wcdma_sf" "Spreading Factor"
-        add_plain_info_entry "Slot" "$wcdma_slot" "Slot"
+        add_plain_info_entry "Slot" "$wcdma_slot" "Time Slot"
         add_plain_info_entry "Speech Code" "$wcdma_speech_code" "Speech Code"
         add_plain_info_entry "Compression Mode" "$wcdma_com_mod" "Compression Mode"
         ;;
     esac
+}
+
+# get sim switch capabilities
+sim_switch_capabilities(){
+    case $platform in
+        "qualcomm") sim_switch="1" ;;
+        "mediatek") sim_switch="1" ;;
+        *) sim_switch="0" ;;
+    esac
+    json_add_string "supportSwitch" "$sim_switch"
+    json_add_array "simSlots"
+    json_add_string "" "0"
+    json_add_string "" "1"
+    json_close_array
+}
+
+get_sim_slot(){
+    local at_command="AT+GTDUALSIM?"
+	local expect_response="+GTDUALSIM"
+    response=$(at $at_port $at_command |grep $expect_response)
+    case $platform in
+        "qualcomm")
+            sim_slot=$(echo "$response" | awk -F': ' '{print $2}' | awk -F',' '{print $1}' | tr -d '\r')
+            ;;
+        "mediatek")
+            sim_slot=$(echo "$response" | awk -F': ' '{print $2}' | awk -F',' '{print $1}' | xargs)
+            ;;
+        *)
+            sim_slot="unknown"
+            ;;
+    esac
+    json_add_string "sim_slot" "$sim_slot"
+}
+
+set_sim_slot(){
+    local sim_slot_param=$1
+    local at_command="AT+GTDUALSIM=$sim_slot_param"
+    response=$(at $at_port $at_command)
+    json_add_string "result" "$response"
 }

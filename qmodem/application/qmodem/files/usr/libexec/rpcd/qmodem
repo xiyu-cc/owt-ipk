@@ -84,6 +84,7 @@ get_modem_config() {
     vendor=$(uci get qmodem.$section.manufacturer 2>/dev/null)
     platform=$(uci get qmodem.$section.platform 2>/dev/null)
     [ -n "$vendor" ] && vendor=$(printf '%s' "$vendor" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    manufacturer="$vendor"
     [ -n "$platform" ] && platform=$(printf '%s' "$platform" | tr 'A-Z' 'a-z' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     pdp_index=$(uci get qmodem.$section.pdp_index 2>/dev/null)
     [ -z "$pdp_index" ] && pdp_index=$(uci get qmodem.$section.suggest_pdp_index 2>/dev/null)
@@ -739,6 +740,9 @@ EOF
                 imei=$(echo "$input" | jsonfilter -e '@.imei')
                 json_init
                 json_add_string imei "$imei"
+                json_add_object result
+                json_add_string status "1"
+                json_close_object
                 set_imei "$imei"
                 json_dump
                 ;;
