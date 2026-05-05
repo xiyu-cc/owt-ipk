@@ -1,18 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Extract translatable strings from LuCI JavaScript files and shell scripts for i18n template generation.
-This script searches for _() function calls in JS files and add_*_entry function calls in shell scripts.
+Extract translatable strings from LuCI JavaScript, shell scripts, and LuCI menu JSON
+for i18n template generation.
 """
 
-import os
 import re
 import json
 import sys
 from pathlib import Path
-from typing import Set, Dict, List
+from typing import Any, Dict, List
 
-def extract_strings_from_file(file_path: str) -> List[Dict[str, any]]:
+
+def _unescape_extracted_string(string: str) -> str:
+    """Unescape common escape sequences from extracted source strings."""
+    string = string.replace(r"\'", "'")
+    string = string.replace(r'\"', '"')
+    string = string.replace(r"\\", "\\")
+    string = string.replace(r"\n", "\n")
+    string = string.replace(r"\t", "\t")
+    return string
+
+
+def extract_strings_from_file(file_path: str) -> List[Dict[str, Any]]:
     """
     Extract all strings from _() calls in a JavaScript file with location info.
     
@@ -59,7 +69,7 @@ def extract_strings_from_file(file_path: str) -> List[Dict[str, any]]:
     
     return strings
 
-def extract_strings_from_shell_file(file_path: str) -> List[Dict[str, any]]:
+def extract_strings_from_shell_file(file_path: str) -> List[Dict[str, Any]]:
     """
     Extract all strings from add_plain_info_entry, add_warning_message_entry, 
     and add_bar_info_entry calls in a shell script file with location info.
@@ -76,10 +86,10 @@ def extract_strings_from_shell_file(file_path: str) -> List[Dict[str, any]]:
         with open(file_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
         
-        # Pattern to match the three add_*_entry functions and extract the 3rd parameter
-        # These functions have format: add_*_entry "param1" "param2" "param3" ...
-        # We want to extract param3 (the translatable string)
-        # Pattern to match variables named "class" is also included
+        # Pattern to match i18n-like literals in shell scripts.
+        # - add_*_entry ... "param3" / 'param3'
+        # - class="..."
+        # - key_full_name="..." direct assignment (e.g. Frequency Band alias)
         patterns = [
             # Match add_plain_info_entry with 3rd parameter in double quotes
             r'add_plain_info_entry\s+(?:"[^"]*"|\'[^\']*\'|\$\w+)\s+(?:"[^"]*"|\'[^\']*\'|\$\w+)\s+"([^"]+)"',
@@ -96,6 +106,9 @@ def extract_strings_from_shell_file(file_path: str) -> List[Dict[str, any]]:
             # Match with all variable named "class" parameters e.g. class="Base Info"
             r"class\s*=\s*\"([^\"]+)\"",
             r"class\s*=\s*'([^']+)'",
+            # Match direct literal assignment for key_full_name
+            r'key_full_name\s*=\s*"([^"$]+)"',
+            r"key_full_name\s*=\s*'([^'$]+)'",
         ]
         
         for line_num, line in enumerate(lines, start=1):
@@ -103,12 +116,7 @@ def extract_strings_from_shell_file(file_path: str) -> List[Dict[str, any]]:
                 matches = re.finditer(pattern, line)
                 for match in matches:
                     string = match.group(1)
-                    # Unescape common escape sequences
-                    string = string.replace(r"\'", "'")
-                    string = string.replace(r'\"', '"')
-                    string = string.replace(r"\\", "\\")
-                    string = string.replace(r"\n", "\n")
-                    string = string.replace(r"\t", "\t")
+                    string = _unescape_extracted_string(string)
                     strings.append({
                         'string': string,
                         'line': line_num,
@@ -120,7 +128,40 @@ def extract_strings_from_shell_file(file_path: str) -> List[Dict[str, any]]:
     
     return strings
 
-def scan_directory(root_dir: str) -> List[Dict[str, any]]:
+
+def extract_strings_from_menu_file(file_path: str) -> List[Dict[str, Any]]:
+    """
+    Extract all menu title strings from LuCI menu JSON files.
+
+    Args:
+        file_path: Path to the menu JSON file
+
+    Returns:
+        List of dictionaries containing string, line number, and file path
+    """
+    strings = []
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        pattern = r'"title"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"'
+        for line_num, line in enumerate(lines, start=1):
+            matches = re.finditer(pattern, line)
+            for match in matches:
+                string = _unescape_extracted_string(match.group(1))
+                strings.append({
+                    'string': string,
+                    'line': line_num,
+                    'file': file_path
+                })
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}", file=sys.stderr)
+
+    return strings
+
+
+def scan_directory(root_dir: str) -> List[Dict[str, Any]]:
     """
     Recursively scan directory for JavaScript files and extract strings.
     
@@ -149,7 +190,7 @@ def scan_directory(root_dir: str) -> List[Dict[str, any]]:
     
     return results
 
-def scan_shell_directory(root_dir: str) -> List[Dict[str, any]]:
+def scan_shell_directory(root_dir: str) -> List[Dict[str, Any]]:
     """
     Recursively scan directory for shell script files and extract strings.
     
@@ -178,7 +219,36 @@ def scan_shell_directory(root_dir: str) -> List[Dict[str, any]]:
     
     return results
 
-def generate_po_template(items: List[Dict[str, any]], output_file: str = None):
+
+def scan_menu_directory(root_dir: str) -> List[Dict[str, Any]]:
+    """
+    Recursively scan directory for LuCI menu JSON files and extract title strings.
+
+    Args:
+        root_dir: Root directory to scan
+
+    Returns:
+        List of dictionaries with string, line, and file information
+    """
+    results = []
+    root_path = Path(root_dir)
+
+    if not root_path.exists():
+        print(f"Error: Directory {root_dir} does not exist", file=sys.stderr)
+        return results
+
+    for menu_file in root_path.rglob('*.json'):
+        strings = extract_strings_from_menu_file(str(menu_file))
+        if strings:
+            rel_path = menu_file.relative_to(root_path)
+            for item in strings:
+                item['file'] = str(rel_path)
+                results.append(item)
+
+    return results
+
+
+def generate_po_template(items: List[Dict[str, Any]], output_file: str = None):
     """
     Generate a PO (Portable Object) template file.
     
@@ -229,7 +299,7 @@ def escape_po_string(s: str) -> str:
     s = s.replace('\t', '\\t')
     return s
 
-def generate_json_template(items: List[Dict[str, any]], output_file: str = None):
+def generate_json_template(items: List[Dict[str, Any]], output_file: str = None):
     """
     Generate a JSON template file.
     
@@ -264,7 +334,7 @@ def generate_json_template(items: List[Dict[str, any]], output_file: str = None)
     else:
         print(output)
 
-def generate_txt_list(items: List[Dict[str, any]], output_file: str = None):
+def generate_txt_list(items: List[Dict[str, Any]], output_file: str = None):
     """
     Generate a simple text list of strings with source comments.
     
@@ -297,7 +367,7 @@ def generate_txt_list(items: List[Dict[str, any]], output_file: str = None):
     else:
         print(output)
 
-def print_summary(items: List[Dict[str, any]]):
+def print_summary(items: List[Dict[str, Any]]):
     """Print a summary of extracted strings."""
     print("\n" + "="*70)
     print("EXTRACTION SUMMARY")
@@ -327,7 +397,7 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description='Extract translatable strings from LuCI JavaScript files and shell scripts',
+        description='Extract translatable strings from LuCI JavaScript, shell scripts, and menu JSON',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -342,6 +412,9 @@ Examples:
   
   # Extract from both JS and shell script directories
   %(prog)s --js-path luci/luci-app-qmodem-next/htdocs/luci-static/resources --sh-path application/qmodem/files/usr/share/qmodem
+
+  # Extract with custom LuCI menu directory
+  %(prog)s --menu-path luci/luci-app-qmodem-next/root/usr/share/luci/menu.d
         """
     )
     
@@ -359,6 +432,12 @@ Examples:
     parser.add_argument(
         '--sh-path',
         help='Directory to scan for shell script files with add_*_entry calls'
+    )
+
+    parser.add_argument(
+        '--menu-path',
+        default='luci/luci-app-qmodem-next/root/usr/share/luci/menu.d',
+        help='Directory to scan for LuCI menu JSON files (default: %(default)s)'
     )
     
     parser.add_argument(
@@ -402,6 +481,11 @@ Examples:
         js_scan_dir = js_path
     else:
         js_scan_dir = project_root / js_path
+
+    if Path(args.menu_path).is_absolute():
+        menu_scan_dir = args.menu_path
+    else:
+        menu_scan_dir = project_root / args.menu_path
     
     results = []
     
@@ -410,6 +494,11 @@ Examples:
     js_results = scan_directory(str(js_scan_dir))
     results.extend(js_results)
     print(f"Found {len(js_results)} strings in JavaScript files", file=sys.stderr)
+
+    print(f"Scanning menu JSON directory: {menu_scan_dir}", file=sys.stderr)
+    menu_results = scan_menu_directory(str(menu_scan_dir))
+    results.extend(menu_results)
+    print(f"Found {len(menu_results)} strings in menu JSON files", file=sys.stderr)
     
     # Extract strings from shell scripts if path is provided
     if args.sh_path:
